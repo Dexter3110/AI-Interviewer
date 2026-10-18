@@ -279,6 +279,146 @@ const generateLocalQuestionBank = (setup = {}, plan = {}) => {
     }
   }
 
+  const hasPlannedSections = ['verbal', 'coding', 'sql'].every(
+    section => Number.isFinite(Number(plan[section]))
+  );
+
+  if (hasPlannedSections) {
+    const plannedVerbal = Math.max(0, Number(plan.verbal));
+    const plannedCoding = Math.max(0, Number(plan.coding));
+    const plannedSql = Math.max(0, Number(plan.sql));
+    const bySection = {
+      verbal: questions.filter(q => (q.section || q.type) === 'verbal'),
+      coding: questions.filter(q => (q.section || q.type) === 'coding'),
+      sql: questions.filter(q => (q.section || q.type) === 'sql'),
+    };
+
+    const selected = {
+      verbal: bySection.verbal.slice(0, plannedVerbal),
+      coding: bySection.coding.slice(0, plannedCoding),
+      sql: bySection.sql.slice(0, plannedSql),
+    };
+
+    const verbalShortfall = plannedVerbal - selected.verbal.length;
+    if (verbalShortfall > 0) {
+      const extras = [...bySection.coding, ...bySection.sql].slice(0, verbalShortfall);
+      selected.verbal.push(...extras.map((q, index) => ({
+        ...q,
+        type: 'verbal',
+        section: 'verbal',
+        questionType: 'technical_reasoning',
+        category: 'Hard / Technical Reasoning',
+        text: `Explain your approach to ${q.problem?.title || q.category || 'this technical task'} and discuss its key tradeoffs.`,
+        problem: null,
+        constraints: [],
+        examples: [],
+        language: '',
+      })));
+    }
+
+    const codingVariants = [
+      {
+        title: 'First Non-Repeating Character',
+        text: 'Write a function that returns the first non-repeating character in a string, or null if none exists.',
+        inputFormat: '"swiss"',
+        outputFormat: '"w"',
+        constraints: ['Target O(n) time complexity.'],
+      },
+      {
+        title: 'Balanced Brackets',
+        text: 'Write a function that returns whether a string containing (), [] and {} has balanced brackets.',
+        inputFormat: '"{[()]}"',
+        outputFormat: 'true',
+        constraints: ['Use O(n) time and O(n) auxiliary space.'],
+      },
+      {
+        title: 'Merge Sorted Arrays',
+        text: 'Write a function that merges two sorted integer arrays into one sorted array.',
+        inputFormat: '[1, 4, 7], [2, 3, 8]',
+        outputFormat: '[1, 2, 3, 4, 7, 8]',
+        constraints: ['Target O(n + m) time complexity.'],
+      },
+      {
+        title: 'Maximum Subarray Sum',
+        text: 'Write a function that returns the largest sum of any contiguous subarray.',
+        inputFormat: '[-2, 1, -3, 4, -1, 2, 1, -5, 4]',
+        outputFormat: '6',
+        constraints: ['Target O(n) time complexity.'],
+      },
+    ];
+    while (selected.coding.length < plannedCoding) {
+      const variant = codingVariants[selected.coding.length % codingVariants.length];
+      const number = selected.coding.length + 1;
+      selected.coding.push({
+        difficultyTier: 'hard',
+        type: 'coding',
+        section: 'coding',
+        questionType: 'coding_workspace_problem',
+        category: `Hard / Coding Workspace ${number}`,
+        text: `Hands-on Coding Challenge: ${variant.text} Use ${codingLang}.`,
+        intent: 'Assess problem solving, implementation quality, and edge-case reasoning.',
+        problem: {
+          title: variant.title,
+          description: variant.text,
+          inputFormat: variant.inputFormat,
+          outputFormat: variant.outputFormat,
+        },
+        constraints: variant.constraints,
+        examples: [{ input: variant.inputFormat, output: variant.outputFormat }],
+        language: codingLang,
+      });
+    }
+
+    const sqlVariants = [
+      {
+        title: 'Top Earners by Department',
+        text: 'Return the two highest-paid employees in each department, including department, employee, and salary.',
+        inputFormat: 'Employees(id, name, salary, department_id)',
+        outputFormat: 'department_id, name, salary',
+      },
+      {
+        title: 'Customers Without Orders',
+        text: 'Find every customer who has not placed an order.',
+        inputFormat: 'Customers(id, name); Orders(id, customer_id)',
+        outputFormat: 'customer id and name',
+      },
+      {
+        title: 'Monthly Revenue',
+        text: 'Calculate monthly revenue from completed orders, grouped by calendar month.',
+        inputFormat: 'Orders(id, total, status, created_at)',
+        outputFormat: 'month and revenue',
+      },
+    ];
+    while (selected.sql.length < plannedSql) {
+      const variant = sqlVariants[selected.sql.length % sqlVariants.length];
+      const number = selected.sql.length + 1;
+      selected.sql.push({
+        difficultyTier: 'hard',
+        type: 'sql',
+        section: 'sql',
+        questionType: 'sql_workspace_problem',
+        category: `Hard / SQL Workspace ${number}`,
+        text: `Hands-on SQL Challenge: ${variant.text}`,
+        intent: 'Assess SQL query construction, correctness, and handling of edge cases.',
+        problem: {
+          title: variant.title,
+          description: variant.text,
+          inputFormat: variant.inputFormat,
+          outputFormat: variant.outputFormat,
+        },
+        constraints: ['Use a clear and efficient query.'],
+        examples: [],
+        language: 'sql',
+      });
+    }
+
+    const tierOrder = { easy: 0, medium: 1, hard: 2 };
+    return [...selected.verbal, ...selected.coding, ...selected.sql]
+      .sort((a, b) => (tierOrder[a.difficultyTier] ?? 1) - (tierOrder[b.difficultyTier] ?? 1))
+      .slice(0, total)
+      .map((question, index) => ({ ...question, id: index + 1 }));
+  }
+
   return questions;
 };
 
@@ -288,18 +428,52 @@ const enrichQuestionBank = (questionBank, setup = {}, plan = {}) => {
     return generateLocalQuestionBank(setup, plan);
   }
 
+  const hasPlannedSections = ['verbal', 'coding', 'sql'].every(
+    section => Number.isFinite(Number(plan[section]))
+  );
+  if (hasPlannedSections) {
+    const expected = {
+      verbal: Math.max(0, Number(plan.verbal)),
+      coding: Math.max(0, Number(plan.coding)),
+      sql: Math.max(0, Number(plan.sql)),
+    };
+    const actual = Object.fromEntries(
+      Object.keys(expected).map(section => [
+        section,
+        questionBank.filter(q => (q.section || q.type) === section).length,
+      ])
+    );
+    const bankMatchesPlan =
+      questionBank.length === Number(plan.total) &&
+      Object.keys(expected).every(section => actual[section] === expected[section]);
+
+    if (!bankMatchesPlan) {
+      console.warn('AI question bank does not match the interview plan; using the local bank.', {
+        expected,
+        actual,
+        expectedTotal: Number(plan.total),
+        actualTotal: questionBank.length,
+      });
+      return generateLocalQuestionBank(setup, plan);
+    }
+  }
+
   const isTech = isTechnicalDomain(setup);
   if (!isTech) return questionBank;
 
   const codingLang = String(setup.codingLanguage || 'python').toLowerCase();
   const enriched = [...questionBank];
+  const plannedWorkspace = hasPlannedSections
+    ? Number(plan.coding) + Number(plan.sql)
+    : null;
 
   // 1. Medium Tier Pseudocode Check
   const hasPseudocode = enriched.some(
     q => q.text.toLowerCase().includes('pseudocode') || String(q.questionType).toLowerCase().includes('pseudocode')
   );
 
-  if (!hasPseudocode && enriched.length >= 6) {
+  const plannedVerbal = hasPlannedSections ? Number(plan.verbal) : null;
+  if (!hasPseudocode && enriched.length >= 6 && (plannedVerbal === null || plannedVerbal >= 6)) {
     enriched[4] = {
       id: 5,
       difficultyTier: 'medium',
@@ -330,7 +504,7 @@ const enrichQuestionBank = (questionBank, setup = {}, plan = {}) => {
     q => q.type === 'coding' || q.type === 'sql' || q.section === 'coding' || q.section === 'sql'
   );
 
-  if (!hasPracticalWorkspace && enriched.length >= 10) {
+  if (!hasPracticalWorkspace && enriched.length >= 10 && (plannedWorkspace === null || plannedWorkspace > 0)) {
     enriched[8] = {
       id: 9,
       difficultyTier: 'hard',

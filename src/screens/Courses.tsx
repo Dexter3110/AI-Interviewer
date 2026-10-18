@@ -27,7 +27,17 @@ type Resource = {
   skills?: string[];
   relevance?: number;
   free?: boolean;
+  id?: string;
+  rating?: number;
+  reviews?: number;
+  reason?: string;
+  credentialType?: "academic" | "professional" | "completion" | "none";
+  credentialAuthority?: string;
+  credentialScore?: number;
 };
+
+const SUGGESTED_INTERESTS = ["Python", "JavaScript", "React", "Data Structures", "SQL", "System Design", "Machine Learning", "Communication Skills", "Data Analysis", "Project Management"];
+const COURSE_PLATFORMS = ["YouTube", "Coursera", "Udemy", "NPTEL / SWAYAM"];
 
 const FALLBACK_RESOURCES: Resource[] = [
   {
@@ -74,7 +84,7 @@ const FALLBACK_RESOURCES: Resource[] = [
   },
 ];
 
-export default function Courses() {
+export default function Courses({ onNavigate }: { onNavigate?: (s: any) => void } = {}) {
   const { user } = useAuth();
 
   const [resources, setResources] =
@@ -90,9 +100,14 @@ export default function Courses() {
     useState("");
 
   const [activeTab, setActiveTab] =
-    useState<"recommended" | "youtube" | "courses">(
+    useState<"recommended" | "youtube" | "courses" | "certificates" | "saved">(
       "recommended"
     );
+  const [interests, setInterests] = useState<string[]>([]);
+  const [savedIds, setSavedIds] = useState<string[]>([]);
+  const [levelFilter, setLevelFilter] = useState("");
+  const [freeOnly, setFreeOnly] = useState(false);
+  const [platformFilter, setPlatformFilter] = useState("");
 
   const profile = user?.profile;
 
@@ -143,13 +158,27 @@ export default function Courses() {
     setError("");
 
     try {
-      const query =
-        customQuery?.trim() ||
-        search.trim() ||
-        profileQuery;
-
-      const result =
-        await api.searchInternetCourses(query);
+      const query = customQuery?.trim() || search.trim();
+      let result: any;
+      if (query || platformFilter || levelFilter || freeOnly) {
+        result = await api.searchCourses({ q: query, level: levelFilter, free: freeOnly, platform: platformFilter });
+        const catalogItems = Array.isArray(result?.items) ? result.items : [];
+        const youtubeItems = Array.isArray(result?.youtube) ? result.youtube : [];
+        if (catalogItems.length || youtubeItems.length) {
+          setResources([...catalogItems, ...youtubeItems]);
+          return;
+        }
+        result = await api.searchInternetCourses(query);
+      } else {
+        result = await api.getRecommendedCourses();
+        setInterests(Array.isArray(result?.interests) ? result.interests : []);
+        setSavedIds(Array.isArray(result?.savedIds) ? result.savedIds : []);
+        if (Array.isArray(result?.items) && result.items.length) {
+          setResources(result.items);
+          return;
+        }
+        result = await api.searchInternetCourses(profileQuery);
+      }
 
       /*
        Expected backend response:
@@ -220,6 +249,42 @@ export default function Courses() {
     fetchResources();
   }, []);
 
+  useEffect(() => {
+    if (activeTab === "saved") {
+      api.getSavedCourses().then((result: any) => setResources(result?.items || [])).catch(() => setResources([]));
+    } else if (activeTab === "certificates") {
+      api.getCertificateCourses().then((result: any) => setResources(result?.items || [])).catch(() => setResources([]));
+    } else if (activeTab === "youtube") {
+      api.searchCourses({ q: "", platform: "YouTube" }).then((result: any) => setResources(result?.items || [])).catch(() => setResources([]));
+    }
+  }, [activeTab]);
+
+  const toggleInterest = async (topic: string) => {
+    const next = interests.includes(topic) ? interests.filter((item) => item !== topic) : [...interests, topic];
+    setInterests(next);
+    try {
+      await api.saveCourseInterests(next);
+      const result: any = await api.getRecommendedCourses();
+      setResources(result?.items || []);
+      setSavedIds(result?.savedIds || []);
+    } catch (err) {
+      console.error("Could not update course interests:", err);
+      setError("Could not save your learning interests. Please try again.");
+    }
+  };
+
+  const recordAction = async (resource: Resource, action: "save" | "complete" | "view") => {
+    if (!resource.id || resource.type === "youtube") return;
+    try {
+      await api.courseAction(resource.id, action);
+      if (action === "save") setSavedIds((current) => current.includes(resource.id!) ? current : [...current, resource.id!]);
+      if (action === "complete") setResources((current) => current.filter((item) => item.id !== resource.id));
+    } catch (err) {
+      console.error("Could not record course action:", err);
+      setError("Could not save that course update. Please try again.");
+    }
+  };
+
   const filteredResources = useMemo(() => {
     let list = [...resources];
 
@@ -244,6 +309,13 @@ export default function Courses() {
           item.type === "article"
       );
     }
+
+    if (activeTab === "certificates") {
+      list = list.filter((item) => item.credentialType && item.credentialType !== "none")
+        .sort((a, b) => (b.credentialScore || 0) - (a.credentialScore || 0));
+    }
+
+    if (activeTab === "saved") list = list.filter((item) => item.id && savedIds.includes(item.id));
 
     if (search.trim()) {
       const q =
@@ -271,6 +343,7 @@ export default function Courses() {
     resources,
     activeTab,
     search,
+    savedIds,
   ]);
 
   const youtubeResources =
@@ -351,8 +424,7 @@ export default function Courses() {
               color: "#64748B",
             }}
           >
-            Real courses and YouTube resources
-            selected for {fullName}.
+            YouTube, Coursera, Udemy, and recognized certificate programs selected for {fullName}.
           </p>
         </div>
 
@@ -444,6 +516,7 @@ export default function Courses() {
                 display: "flex",
                 flexWrap: "wrap",
                 gap: "7px",
+                marginTop: "10px",
               }}
             >
               {skills
@@ -470,8 +543,21 @@ export default function Courses() {
                   </span>
                 ))}
             </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "7px", marginTop: "12px" }}>
+              {SUGGESTED_INTERESTS.map((topic) => {
+                const selected = interests.includes(topic);
+                return <button key={topic} onClick={() => toggleInterest(topic)} style={{ padding: "6px 11px", borderRadius: "999px", border: "1px solid #C7D2FE", cursor: "pointer", background: selected ? "#3358E8" : "#fff", color: selected ? "#fff" : "#3358E8", fontSize: "12px" }}>{topic}</button>;
+              })}
+            </div>
           </div>
         </div>
+      </div>
+
+      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "12px", margin: "-10px 0 22px", color: "#475569", fontSize: "13px" }}>
+        <label>Level <select value={levelFilter} onChange={(event) => setLevelFilter(event.target.value)} style={{ padding: "7px", border: "1px solid #E2E8F0", borderRadius: "8px" }}><option value="">Any level</option><option>Beginner</option><option>Intermediate</option><option>Advanced</option></select></label>
+        <label style={{ display: "flex", alignItems: "center", gap: "5px" }}><input type="checkbox" checked={freeOnly} onChange={(event) => setFreeOnly(event.target.checked)} /> Free only</label>
+        <label>Platform <select value={platformFilter} onChange={(event) => setPlatformFilter(event.target.value)} style={{ padding: "7px", border: "1px solid #E2E8F0", borderRadius: "8px" }}><option value="">Any platform</option>{[...new Set([...COURSE_PLATFORMS, ...resources.map((resource) => resource.platform).filter(Boolean) as string[]])].map((platform) => <option key={platform} value={platform}>{platform}</option>)}</select></label>
+        <button onClick={() => fetchResources(search)} style={{ padding: "8px 12px", border: "1px solid #D8E2FF", borderRadius: "8px", background: "#EEF4FF", color: "#3358E8", cursor: "pointer" }}>Apply filters</button>
       </div>
 
       {/* SEARCH */}
@@ -584,6 +670,8 @@ export default function Courses() {
             label: "Courses",
             icon: BookOpen,
           },
+          { id: "certificates", label: "Certificates", icon: GraduationCap },
+          { id: "saved", label: "Saved", icon: BookOpen },
         ].map((tab) => {
           const Icon =
             tab.icon;
@@ -839,6 +927,17 @@ export default function Courses() {
 
                   {/* META */}
 
+                  {(resource.rating || resource.reason) && <div style={{ marginBottom: "12px", fontSize: "12px", color: "#475569" }}>
+                    {resource.rating ? <span>{resource.rating.toFixed(1)} ★ ({(resource.reviews || 0).toLocaleString()} learners) </span> : null}
+                    {resource.reason && <div style={{ color: "#4F46E5", marginTop: "4px" }}>{resource.reason}</div>}
+                    {resource.reason?.includes("interviews") && <span style={{ display: "inline-block", marginTop: "5px", color: "#7C3AED", background: "#F5F3FF", padding: "4px 7px", borderRadius: "999px" }}>Recommended from your interview</span>}
+                  </div>}
+
+                  {resource.credentialType && resource.credentialType !== "none" && <div style={{ marginBottom: "12px", padding: "8px 10px", borderRadius: "8px", background: resource.credentialType === "academic" ? "#ECFDF5" : resource.credentialType === "professional" ? "#EEF4FF" : "#F8FAFC", color: resource.credentialType === "academic" ? "#047857" : "#334155", fontSize: "11px", lineHeight: 1.45 }}>
+                    <strong>{resource.credentialType === "academic" ? "Academic certificate" : resource.credentialType === "professional" ? "Professional certificate" : "Completion certificate"}</strong>
+                    {resource.credentialAuthority && <div>{resource.credentialAuthority}</div>}
+                  </div>}
+
                   <div
                     style={{
                       display:
@@ -970,6 +1069,7 @@ export default function Courses() {
                     }
                     target="_blank"
                     rel="noopener noreferrer"
+                    onClick={() => recordAction(resource, "view")}
                     style={{
                       marginTop:
                         "auto",
@@ -1014,6 +1114,10 @@ export default function Courses() {
                       ? "Watch on YouTube"
                       : "Open Course"}
                   </a>
+                  {resource.id && resource.type !== "youtube" && <div style={{ display: "flex", gap: "8px", marginTop: "9px" }}>
+                    <button onClick={() => recordAction(resource, "save")} disabled={savedIds.includes(resource.id)} style={{ flex: 1, padding: "9px", border: "1px solid #D8E2FF", borderRadius: "8px", background: savedIds.includes(resource.id) ? "#F1F5F9" : "#fff", color: "#3358E8", cursor: "pointer" }}>{savedIds.includes(resource.id) ? "Saved" : "Save"}</button>
+                    <button onClick={() => recordAction(resource, "complete")} style={{ flex: 1, padding: "9px", border: "0", borderRadius: "8px", background: "#ECFDF5", color: "#047857", cursor: "pointer" }}>Mark done</button>
+                  </div>}
                 </div>
               );
             }
@@ -1049,7 +1153,7 @@ export default function Courses() {
                     "4px",
                 }}
               />
-              {resources.length} live
+              {resources.length} learning
               resources
             </span>
 

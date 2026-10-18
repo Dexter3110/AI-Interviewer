@@ -14,23 +14,34 @@ from ultralytics import YOLO
 # CONFIGURATION
 # ============================================================
 
+def env_float(name, default, minimum, maximum):
+    try:
+        value = float(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        print(f"Invalid {name}; using default {default}.", flush=True)
+        value = default
+    return max(minimum, min(maximum, value))
+
+
 YOLO_MODEL = "yolo11n.pt"
 
 MAX_WARNINGS = 50
 
-LOOK_AWAY_SECONDS = 2.0
-FACE_OUTSIDE_SECONDS = 5.0
-NO_FACE_SECONDS = 5.0
+LOOK_AWAY_SECONDS = env_float("PROCTOR_LOOK_AWAY_SECONDS", 2.0, 0.1, 60.0)
+FACE_OUTSIDE_SECONDS = env_float("PROCTOR_FACE_OUTSIDE_SECONDS", 5.0, 0.1, 60.0)
+NO_FACE_SECONDS = env_float("PROCTOR_NO_FACE_SECONDS", 5.0, 0.1, 60.0)
 
 CIRCLE_RX_RATIO = 0.32
 CIRCLE_RY_RATIO = 0.38
 
 # MediaPipe face direction sensitivity
 # Smaller = more sensitive
-YAW_THRESHOLD = 0.16
+YAW_THRESHOLD = env_float("PROCTOR_YAW_THRESHOLD", 0.16, 0.01, 1.0)
 
-YOLO_CONFIDENCE = 0.40
-PERSON_CONFIDENCE = 0.50
+YOLO_CONFIDENCE = env_float("PROCTOR_YOLO_CONFIDENCE", 0.40, 0.01, 1.0)
+PERSON_CONFIDENCE = env_float("PROCTOR_PERSON_CONFIDENCE", 0.50, 0.01, 1.0)
+FACE_LANDMARKER_CONFIDENCE = env_float("PROCTOR_FACE_CONFIDENCE", 0.50, 0.01, 1.0)
+HAND_LANDMARKER_CONFIDENCE = env_float("PROCTOR_HAND_CONFIDENCE", 0.50, 0.01, 1.0)
 
 FACE_MODEL_FILE = "face_landmarker.task"
 HAND_MODEL_FILE = "hand_landmarker.task"
@@ -161,9 +172,9 @@ class InterviewObjectDetector:
             # a second person.
             num_faces=5,
 
-            min_face_detection_confidence=0.5,
-            min_face_presence_confidence=0.5,
-            min_tracking_confidence=0.5
+            min_face_detection_confidence=FACE_LANDMARKER_CONFIDENCE,
+            min_face_presence_confidence=FACE_LANDMARKER_CONFIDENCE,
+            min_tracking_confidence=FACE_LANDMARKER_CONFIDENCE
         )
 
         self.face_landmarker = (
@@ -186,9 +197,9 @@ class InterviewObjectDetector:
 
             num_hands=2,
 
-            min_hand_detection_confidence=0.5,
-            min_hand_presence_confidence=0.5,
-            min_tracking_confidence=0.5
+            min_hand_detection_confidence=HAND_LANDMARKER_CONFIDENCE,
+            min_hand_presence_confidence=HAND_LANDMARKER_CONFIDENCE,
+            min_tracking_confidence=HAND_LANDMARKER_CONFIDENCE
         )
 
         self.hand_landmarker = (

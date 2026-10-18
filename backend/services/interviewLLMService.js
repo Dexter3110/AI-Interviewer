@@ -7,7 +7,6 @@ async function agent(path, payload, timeout = 90000) {
   return response.data;
 }
 
-exports.nextQuestion = (payload) => agent('/question', payload);
 exports.evaluateAnswer = (payload) => agent('/evaluate', payload);
 exports.transcribe = async (buffer, filename, mimeType) => {
   const FormData = require('form-data');

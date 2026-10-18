@@ -24,26 +24,19 @@ app = Flask(__name__)
 # The agents are loaded only when they are actually needed.
 # ============================================================
 
-ask_verbal = None
 eval_verbal = None
 
-ask_code = None
 eval_code = None
 
 
 def load_verbal_agent():
-    global ask_verbal
     global eval_verbal
 
-    if ask_verbal is None or eval_verbal is None:
+    if eval_verbal is None:
         print("Loading normal-question RAG agent...", flush=True)
 
-        from normal_questions_agent import (
-            ask,
-            evaluate,
-        )
+        from normal_questions_agent import evaluate
 
-        ask_verbal = ask
         eval_verbal = evaluate
 
         print(
@@ -51,22 +44,17 @@ def load_verbal_agent():
             flush=True
         )
 
-    return ask_verbal, eval_verbal
+    return eval_verbal
 
 
 def load_coding_agent():
-    global ask_code
     global eval_code
 
-    if ask_code is None or eval_code is None:
+    if eval_code is None:
         print("Loading coding/SQL agent...", flush=True)
 
-        from coding_sql_agent import (
-            ask,
-            evaluate,
-        )
+        from coding_sql_agent import evaluate
 
-        ask_code = ask
         eval_code = evaluate
 
         print(
@@ -74,7 +62,7 @@ def load_coding_agent():
             flush=True
         )
 
-    return ask_code, eval_code
+    return eval_code
 
 
 # ============================================================
@@ -178,152 +166,6 @@ def transcribe():
 
 
 # ============================================================
-# GENERATE QUESTION
-# ============================================================
-
-@app.post("/question")
-def question():
-    try:
-        p = request.get_json(
-            force=True
-        )
-
-        setup = p.get(
-            "setup",
-            {}
-        )
-
-        history = p.get(
-            "history",
-            []
-        )
-
-        index = int(
-            p.get(
-                "questionIndex",
-                1
-            )
-        )
-
-        plan = p.get(
-            "plan",
-            {}
-        )
-
-        # ----------------------------------------------------
-        # DETERMINE INTERVIEW TYPE
-        # ----------------------------------------------------
-
-        coding_interview = (
-            plan.get("coding", 0)
-            + plan.get("sql", 0)
-        ) > 0
-
-        used_coding = sum(
-            1
-            for h in history
-            if h.get("section")
-            in (
-                "coding",
-                "sql"
-            )
-        )
-
-        used_verbal = sum(
-            1
-            for h in history
-            if h.get("section")
-            == "verbal"
-        )
-
-        remaining_coding = (
-            plan.get("coding", 0)
-            + plan.get("sql", 0)
-            - used_coding
-        )
-
-        remaining_verbal = (
-            plan.get("verbal", 0)
-            - used_verbal
-        )
-
-        # ----------------------------------------------------
-        # VERBAL QUESTION
-        # ----------------------------------------------------
-
-        if (
-            not coding_interview
-            or (
-                remaining_verbal
-                >= remaining_coding
-                and remaining_verbal
-                > 0
-            )
-        ):
-
-            ask_verbal_fn, _ = (
-                load_verbal_agent()
-            )
-
-            result = ask_verbal_fn(
-                setup,
-                history,
-                index,
-                p.get(
-                    "lastEvaluation"
-                )
-            )
-
-        # ----------------------------------------------------
-        # CODING / SQL QUESTION
-        # ----------------------------------------------------
-
-        else:
-
-            ask_code_fn, _ = (
-                load_coding_agent()
-            )
-
-            sql_left = (
-                plan.get("sql", 0)
-                - sum(
-                    1
-                    for h in history
-                    if h.get("section")
-                    == "sql"
-                )
-            )
-
-            section = (
-                "sql"
-                if sql_left > 0
-                else "coding"
-            )
-
-            result = ask_code_fn(
-                setup,
-                history,
-                index,
-                section
-            )
-
-        return jsonify(
-            result
-        )
-
-    except Exception as e:
-        print(
-            "Question generation error:",
-            e,
-            flush=True
-        )
-
-        return jsonify({
-            "message": str(e)
-        }), 500
-
-
-# ============================================================
 # EVALUATE ANSWER
 # ============================================================
 
@@ -348,9 +190,7 @@ def evaluate():
             "sql"
         ):
 
-            _, eval_code_fn = (
-                load_coding_agent()
-            )
+            eval_code_fn = load_coding_agent()
 
             result = eval_code_fn(
                 p
@@ -362,9 +202,7 @@ def evaluate():
 
         else:
 
-            _, eval_verbal_fn = (
-                load_verbal_agent()
-            )
+            eval_verbal_fn = load_verbal_agent()
 
             result = eval_verbal_fn(
                 p

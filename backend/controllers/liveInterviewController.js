@@ -485,10 +485,11 @@ function historyFrom(
 function averageScore(
   answers
 ) {
+  if (!Array.isArray(answers) || !answers.length) return 0;
   const scored =
     answers
       .map(
-        a => Number(a.score)
+        a => Number(a.score ?? a.evaluation?.score ?? 0)
       )
       .filter(
         Number.isFinite
@@ -1147,6 +1148,13 @@ exports.complete =
             interview.answers
           );
 
+        const lastAnswer = interview.answers[interview.answers.length - 1];
+        const lastSummary =
+          lastAnswer?.evaluation?.feedback ||
+          lastAnswer?.evaluation?.strengths ||
+          (interview.answers.length ? `Candidate completed ${interview.answers.length} question(s).` : 'Interview ended by candidate.');
+
+        const isTabViolation = req.body?.reason === 'tab_switching_violation';
         interview.summary = {
           averageScore:
             interview.finalScore,
@@ -1155,7 +1163,12 @@ exports.complete =
             interview.answers.length,
 
           completedBecause:
-            'candidate_ended_interview',
+            req.body?.reason || 'candidate_ended_interview',
+
+          lastSummary:
+            isTabViolation
+              ? 'Interview terminated automatically due to repeated tab switching violations.'
+              : lastSummary,
         };
 
         await interview.save();

@@ -21,6 +21,7 @@ const profileSchema = new mongoose.Schema(
     currentRole: { type: String, default: "", trim: true },
     summary: { type: String, default: "", trim: true },
     skills: { type: String, default: "", trim: true },
+    interests: { type: [String], default: [] },
     degree: { type: String, default: "", trim: true },
     university: { type: String, default: "", trim: true },
     graduationYear: { type: String, default: "", trim: true },

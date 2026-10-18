@@ -11,7 +11,7 @@ interface Props {
 export default function TopNav({ onNavigate }: Props) {
   const { user } = useAuth()
   const fullName = (user?.profile?.fullName || `${user?.firstName || ''} ${user?.lastName || ''}`).trim() || 'Candidate'
-  const initials = fullName.split(/\s+/).filter(Boolean).slice(0, 2).map(x => x[0]).join('').toUpperCase() || 'C'
+  const initials = fullName.split(/\s+/).filter(Boolean).slice(0, 2).map((x: string) => x[0]).join('').toUpperCase() || 'C'
   return (
     <header
       className="topnav-header"

@@ -304,11 +304,12 @@ export const api = {
   // ----------------------------------------------------------
 
   completeInterview: (
-    interviewId: string
+    interviewId: string,
+    body?: Record<string, unknown>
   ) =>
     request(
       `/live-interviews/${interviewId}/complete`,
-      { method: 'POST', body: JSON.stringify({}) }
+      { method: 'POST', body: JSON.stringify(body || {}) }
     ),
 
 
@@ -324,6 +325,24 @@ export const api = {
 
   searchInternetCourses: (query: string) =>
     request(`/learning/internet-courses?query=${encodeURIComponent(query)}`),
+
+  getRecommendedCourses: () => request('/learning/recommendations'),
+  getCertificateCourses: () => request('/learning/certificates'),
+  searchCourses: (params: { q: string; level?: string; free?: boolean; platform?: string }) => {
+    const query = new URLSearchParams({ q: params.q });
+    if (params.level) query.set('level', params.level);
+    if (params.free) query.set('free', 'true');
+    if (params.platform) query.set('platform', params.platform);
+    return request(`/learning/search?${query.toString()}`);
+  },
+  saveCourseInterests: (interests: string[]) => request('/learning/interests', {
+    method: 'POST', body: JSON.stringify({ interests }),
+  }),
+  getSavedCourses: () => request('/learning/saved'),
+  courseAction: (id: string, action: 'save' | 'complete' | 'dislike' | 'view') =>
+    request(`/learning/courses/${id}/${action}`, { method: 'POST' }),
+  undoCourseAction: (id: string, action: 'save' | 'complete' | 'dislike') =>
+    request(`/learning/courses/${id}/${action}`, { method: 'DELETE' }),
 
   searchMyFiles: (query: string) =>
     request(`/learning/files?query=${encodeURIComponent(query)}`),

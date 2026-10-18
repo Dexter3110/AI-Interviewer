@@ -34,6 +34,8 @@ const liveInterviewRoutes = require("./routes/liveInterviewRoutes");
 
 // NEW: Learning / Courses / AI routes
 const learningRoutes = require("./routes/learningRoutes");
+const Course = require("./models/Course");
+const { buildStats, computeQuality } = require("./services/courseScoring");
 
 // ============================================================
 // CONFIG
@@ -56,6 +58,24 @@ const MONGO_URI =
 const CLIENT_URL =
   process.env.CLIENT_URL ||
   "http://localhost:8443";
+
+function getPythonExecutable() {
+  if (process.env.PYTHON_BIN) return process.env.PYTHON_BIN;
+
+  const projectVenvPython = path.join(
+    __dirname,
+    "..",
+    "myenv",
+    "Scripts",
+    "python.exe"
+  );
+
+  if (process.platform === "win32" && fs.existsSync(projectVenvPython)) {
+    return projectVenvPython;
+  }
+
+  return process.platform === "win32" ? "python" : "python3";
+}
 
 const app = express();
 
@@ -329,13 +349,7 @@ function startProctor() {
     return;
   }
 
-  const python =
-    process.env.PYTHON_BIN ||
-    (
-      process.platform === "win32"
-        ? "python"
-        : "python3"
-    );
+  const python = getPythonExecutable();
 
   console.log(
     `Starting Python proctor on port ${PROCTOR_PORT}...`
@@ -438,13 +452,7 @@ function startInterviewAgent() {
     return;
   }
 
-  const python =
-    process.env.PYTHON_BIN ||
-    (
-      process.platform === "win32"
-        ? "python"
-        : "python3"
-    );
+  const python = getPythonExecutable();
 
   console.log(
     `Starting AI interview agent on port ${INTERVIEW_AGENT_PORT}...`
@@ -530,6 +538,24 @@ function startInterviewAgent() {
 // START SERVER
 // ============================================================
 
+async function seedCuratedCourses() {
+  if (mongoose.connection.readyState !== 1) return;
+  const curatedPath = path.join(__dirname, "data", "curated_courses.json");
+  if (!fs.existsSync(curatedPath)) return;
+  const courses = JSON.parse(fs.readFileSync(curatedPath, "utf8"));
+  const stats = buildStats(courses);
+  const operations = courses.map((course) => ({
+    updateOne: {
+      filter: { url: course.url },
+      update: { $set: { ...course, source: "curated", qualityScore: computeQuality({ ...course, source: "curated" }, stats) } },
+      upsert: true,
+    },
+  }));
+  if (operations.length) await Course.bulkWrite(operations, { ordered: false });
+  await Course.init();
+  console.log(`Loaded ${courses.length} curated courses.`);
+}
+
 async function startServer() {
   try {
     // --------------------------------------------------------
@@ -538,7 +564,7 @@ async function startServer() {
 
     try {
       await mongoose.connect(MONGO_URI, { serverSelectionTimeoutMS: 3000 });
-      console.log("MongoDB connected to local instance.");
+      console.log(`MongoDB connected: ${mongoose.connection.host}/${mongoose.connection.name}`);
     } catch (mongoErr) {
       console.warn("⚠️ Local MongoDB connection failed:", mongoErr.message);
       console.log("⚡ Starting MongoDB In-Memory Server fallback...");
@@ -555,6 +581,12 @@ async function startServer() {
       } catch (inMemErr) {
         console.error("❌ Could not start In-Memory MongoDB:", inMemErr.message);
       }
+    }
+
+    try {
+      await seedCuratedCourses();
+    } catch (seedError) {
+      console.error("Course catalog startup seed failed:", seedError.message);
     }
 
     // --------------------------------------------------------

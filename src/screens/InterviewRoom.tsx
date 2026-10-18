@@ -48,7 +48,7 @@ const normaliseType = (q: any): QType => {
 const normaliseQuestion = (raw: any, id: number): Question => {
   const type = normaliseType(raw)
   const text = String(raw?.text || raw?.question || raw?.prompt || raw?.content || 'Please introduce yourself.')
-  
+
   let difficultyTier: 'Easy' | 'Medium' | 'Hard' = 'Easy'
   const rawTier = String(raw?.difficultyTier || raw?.difficulty_tier || raw?.tier || '').toLowerCase()
   if (rawTier === 'easy' || rawTier === 'beginner') {
@@ -80,7 +80,7 @@ const normaliseQuestion = (raw: any, id: number): Question => {
 }
 
 export default function InterviewRoom({ onNavigate, setup: setupProp }: Props) {
-const [setup] = useState<any>(() => {
+  const [setup] = useState<any>(() => {
     const defaultSetup = {
       domain: 'Software Engineering',
       subDomain: 'Software Development',
@@ -249,8 +249,8 @@ const [setup] = useState<any>(() => {
           Array.isArray(raw.customTopics)
             ? raw.customTopics.join(', ')
             : raw.customTopics ||
-              raw.custom_topics ||
-              '',
+            raw.custom_topics ||
+            '',
 
         codingLanguage:
           raw.codingLanguage ||
@@ -433,9 +433,28 @@ const [setup] = useState<any>(() => {
   const recognitionActiveRef = useRef(false)
   const liveTranscriptRef = useRef('')
   const [liveTranscript, setLiveTranscript] = useState('')
+  // editedTranscript: what the user sees/edits in the textarea. Synced from liveTranscript unless user manually edited.
+  const [editedTranscript, setEditedTranscript] = useState('')
+  const userEditedRef = useRef(false) // true when user manually typed in the textarea
+  // Track saved and drafted answers per question id so switching questions preserves work
+  const [savedAnswers, setSavedAnswers] = useState<Record<number, string>>({})
+  const [questionDrafts, setQuestionDrafts] = useState<Record<number, string>>({})
+  const inFlightSubmissionRef = useRef<Promise<any> | null>(null)
+  // Tab switching warning system (2 warnings, 3rd terminates interview)
+  const [tabWarning, setTabWarning] = useState<{
+    open: boolean;
+    count: number;
+    title: string;
+    message: string;
+    isTermination: boolean;
+  } | null>(null)
+  const tabSwitchCountRef = useRef(0)
+  const isTabAwayRef = useRef(false)
+  const lastTabSwitchTimeRef = useRef(0)
+  const interviewTerminatedRef = useRef(false)
   const [isListening, setIsListening] = useState(false)
   const [isTranscribing, setIsTranscribing] = useState(false)
-  const [transcript, setTranscript] = useState<{speaker: string; text: string}[]>([])
+  const [transcript, setTranscript] = useState<{ speaker: string; text: string }[]>([])
   const [audioWave, setAudioWave] = useState([4, 6, 5, 8, 5, 7, 4, 6, 5, 8, 4, 6])
   const [isAriaSpeaking, setIsAriaSpeaking] = useState(true)
 
@@ -470,7 +489,7 @@ const [setup] = useState<any>(() => {
     return () => window.clearInterval(timer)
   }, [])
 
-    // 30-second Pre-loading Onboarding Countdown
+  // 30-second Pre-loading Onboarding Countdown
   useEffect(() => {
     if (!isPrepPhase) return
     const prepTimer = window.setInterval(() => {
@@ -535,64 +554,64 @@ const [setup] = useState<any>(() => {
     }
   }, [currentQ?.id, currentQ?.type])
 
-async function startAIInterview() {
-  if (aiStartRef.current) {
-    console.log('ℹ️ AI interview already started/starting — skipping duplicate.')
-    return
-  }
-
-  aiStartRef.current = true
-
-  console.log('🔥 startAIInterview() CALLED')
-  console.log('📦 Interview setup:', setup)
-  console.log('🌐 Calling POST /api/live-interviews/start')
-
-  try {
-    setStatus('Starting AI interviewer…')
-
-    console.log('========================================')
-    console.log('🚀 STARTING AI INTERVIEW')
-    console.log('========================================')
-    console.log(
-      '📦 Final setup sent to backend:',
-      JSON.stringify(setup, null, 2)
-    )
-    console.log('Types:', setup?.types)
-    console.log('Interview types:', setup?.interview_types)
-    console.log('Coding:', setup?.requiresCoding)
-    console.log('SQL:', setup?.requiresSql)
-    console.log('Language:', setup?.codingLanguage)
-    console.log('========================================')
-
-    const started = await api.startInterview(setup)
-
-    console.log('✅ AI interview start response:', started)
-
-    if (!started?.interviewId) {
-      throw new Error('Backend did not return an interview ID.')
+  async function startAIInterview() {
+    if (aiStartRef.current) {
+      console.log('ℹ️ AI interview already started/starting — skipping duplicate.')
+      return
     }
 
-    if (!started?.question) {
-      throw new Error('AI interviewer did not return the first question.')
+    aiStartRef.current = true
+
+    console.log('🔥 startAIInterview() CALLED')
+    console.log('📦 Interview setup:', setup)
+    console.log('🌐 Calling POST /api/live-interviews/start')
+
+    try {
+      setStatus('Starting AI interviewer…')
+
+      console.log('========================================')
+      console.log('🚀 STARTING AI INTERVIEW')
+      console.log('========================================')
+      console.log(
+        '📦 Final setup sent to backend:',
+        JSON.stringify(setup, null, 2)
+      )
+      console.log('Types:', setup?.types)
+      console.log('Interview types:', setup?.interview_types)
+      console.log('Coding:', setup?.requiresCoding)
+      console.log('SQL:', setup?.requiresSql)
+      console.log('Language:', setup?.codingLanguage)
+      console.log('========================================')
+
+      const started = await api.startInterview(setup)
+
+      console.log('✅ AI interview start response:', started)
+
+      if (!started?.interviewId) {
+        throw new Error('Backend did not return an interview ID.')
+      }
+
+      if (!started?.question) {
+        throw new Error('AI interviewer did not return the first question.')
+      }
+
+      // Pre-load question bank data into ref - DO NOT RENDER OR SPEAK ANY QUESTION DURING INITIAL 30-SECOND PREPARATION PHASE!
+      preloadedRef.current = started
+      setInterviewId(String(started.interviewId))
+      setPlan(started.plan || null)
+      setStatus('Pre-loading AI interviewer & 15-question bank in backend (0-30s)...')
+      console.log('✅ Question bank pre-loaded in backend successfully! Waiting for 30s prep countdown to reach 0 before asking Q1.')
+
+    } catch (error: any) {
+      console.error('❌ AI INTERVIEW START FAILED:', error)
+
+      setStatus(error?.message || 'Could not start AI interview')
+      setCameraError(error?.message || 'Could not start AI interviewer.')
+
+      aiStartRef.current = false
+      throw error
     }
-
-    // Pre-load question bank data into ref - DO NOT RENDER OR SPEAK ANY QUESTION DURING INITIAL 30-SECOND PREPARATION PHASE!
-    preloadedRef.current = started
-    setInterviewId(String(started.interviewId))
-    setPlan(started.plan || null)
-    setStatus('Pre-loading AI interviewer & 15-question bank in backend (0-30s)...')
-    console.log('✅ Question bank pre-loaded in backend successfully! Waiting for 30s prep countdown to reach 0 before asking Q1.')
-
-  } catch (error: any) {
-    console.error('❌ AI INTERVIEW START FAILED:', error)
-
-    setStatus(error?.message || 'Could not start AI interview')
-    setCameraError(error?.message || 'Could not start AI interviewer.')
-
-    aiStartRef.current = false
-    throw error
   }
-}
   // Start the interview and camera/proctoring independently. No interview video is stored.
   useEffect(() => {
     let cancelled = false
@@ -626,7 +645,7 @@ async function startAIInterview() {
         if (videoRef.current) {
           videoRef.current.srcObject = stream
           videoRef.current.muted = true
-          
+
           try {
             await videoRef.current.play()
             console.log('Video playback started successfully')
@@ -763,7 +782,7 @@ async function startAIInterview() {
       ) {
         try {
           answerRecorderRef.current.stop()
-        } catch {}
+        } catch { }
       }
 
       streamRef.current?.getTracks().forEach(t => t.stop())
@@ -875,6 +894,11 @@ async function startAIInterview() {
 
     liveTranscriptRef.current = ''
     setLiveTranscript('')
+    setEditedTranscript('')
+    userEditedRef.current = false
+    if (currentQ?.id) {
+      setQuestionDrafts(prev => ({ ...prev, [currentQ.id]: '' }))
+    }
 
     recognition.onstart = () => {
       recognitionActiveRef.current = true
@@ -905,6 +929,13 @@ async function startAIInterview() {
         `${liveTranscriptRef.current} ${interimText}`.trim()
 
       setLiveTranscript(combined)
+      // Sync to editable textarea and drafts only when user has NOT manually typed.
+      if (!userEditedRef.current) {
+        setEditedTranscript(combined)
+        if (currentQ?.id) {
+          setQuestionDrafts(prev => ({ ...prev, [currentQ.id]: combined }))
+        }
+      }
     }
 
     recognition.onerror = (event: any) => {
@@ -922,7 +953,7 @@ async function startAIInterview() {
       if (answerRecorderRef.current?.state === 'recording' && !busy) {
         try {
           recognition.start()
-        } catch {}
+        } catch { }
       }
     }
 
@@ -940,7 +971,7 @@ async function startAIInterview() {
 
     try {
       recognitionRef.current?.stop()
-    } catch {}
+    } catch { }
 
     recognitionRef.current = null
   }
@@ -950,7 +981,7 @@ async function startAIInterview() {
       stopLiveRecognition()
       try {
         window.speechSynthesis?.cancel()
-      } catch {}
+      } catch { }
     }
   }, [])
 
@@ -958,6 +989,85 @@ async function startAIInterview() {
     const handleResize = () => setIsMobile(window.innerWidth < 768)
     window.addEventListener('resize', handleResize)
     return () => window.removeEventListener('resize', handleResize)
+  }, [])
+
+  // Tab switching detection: 2 warnings, terminates on 3rd violation
+  useEffect(() => {
+    const handleTabAway = () => {
+      if (interviewTerminatedRef.current) return
+      console.log('🚪 Tab switch away detected')
+      isTabAwayRef.current = true
+    }
+
+    const handleTabReturn = () => {
+      if (interviewTerminatedRef.current) return
+      if (!isTabAwayRef.current) return
+      isTabAwayRef.current = false
+
+      const now = Date.now()
+      if (now - lastTabSwitchTimeRef.current < 800) return
+      lastTabSwitchTimeRef.current = now
+
+      tabSwitchCountRef.current += 1
+      const count = tabSwitchCountRef.current
+      console.warn('🚨 Tab switch violation #' + count)
+
+      if (count === 1) {
+        setTabWarning({
+          open: true,
+          count: 1,
+          title: '⚠️ Tab Switching Warning (1 of 2)',
+          message: 'You have navigated away from the interview tab. Tab switching is strictly prohibited during the interview. Please stay on this window. If you switch tabs 2 more times, the interview will terminate automatically.',
+          isTermination: false,
+        })
+      } else if (count === 2) {
+        setTabWarning({
+          open: true,
+          count: 2,
+          title: '🚨 Final Warning: Tab Switching Detected (2 of 2)',
+          message: 'You have switched tabs again! This is your FINAL warning. If you navigate away from this tab one more time, your interview will terminate immediately and permanently!',
+          isTermination: false,
+        })
+      } else if (count >= 3) {
+        interviewTerminatedRef.current = true
+        setTabWarning({
+          open: true,
+          count: 3,
+          title: '⛔ Interview Terminated (3 of 3)',
+          message: 'Multiple tab switching violations detected (3 of 3). Your interview has been terminated due to security policy violations. Generating your evaluation report now…',
+          isTermination: true,
+        })
+        window.setTimeout(() => {
+          void finishInterview('tab_switching_violation')
+        }, 3000)
+      }
+    }
+
+    const onVisibilityChange = () => {
+      if (document.hidden || document.visibilityState === 'hidden') {
+        handleTabAway()
+      } else {
+        handleTabReturn()
+      }
+    }
+
+    const onWindowBlur = () => {
+      handleTabAway()
+    }
+
+    const onWindowFocus = () => {
+      handleTabReturn()
+    }
+
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    window.addEventListener('blur', onWindowBlur)
+    window.addEventListener('focus', onWindowFocus)
+
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+      window.removeEventListener('blur', onWindowBlur)
+      window.removeEventListener('focus', onWindowFocus)
+    }
   }, [])
 
   async function startAnswerRecording() {
@@ -1029,7 +1139,7 @@ async function startAIInterview() {
 
   async function stopAndTranscribeAnswer() {
     const rec = answerRecorderRef.current
-    if (!rec || rec.state === 'inactive' || !interviewId || !currentQ) return ''
+    if (!rec || !interviewId || !currentQ) return ''
 
     setIsTranscribing(true)
     setStatus('Finalizing speech-to-text…')
@@ -1039,7 +1149,7 @@ async function startAIInterview() {
       rec.onstop = event => {
         try {
           oldOnStop?.call(rec, event)
-        } catch {}
+        } catch { }
         resolve()
       }
 
@@ -1076,6 +1186,10 @@ async function startAIInterview() {
 
       if (finalText) {
         setLiveTranscript(finalText)
+        // Update editable textarea too (only if user hasn't manually edited yet)
+        if (!userEditedRef.current) {
+          setEditedTranscript(finalText)
+        }
       }
 
       return finalText
@@ -1089,8 +1203,15 @@ async function startAIInterview() {
     setBusy(true)
     setStatus('AI is evaluating your answer…')
 
+    // ✅ Optimistically mark question as completed immediately so the green tick
+    // appears right away regardless of backend latency or early interview end.
+    const submittedQId = currentQ.id
+    setCompletedQs(prev => new Set([...prev, submittedQId]))
+    setSavedAnswers(prev => ({ ...prev, [submittedQId]: answer }))
+    setQuestionDrafts(prev => ({ ...prev, [submittedQId]: answer }))
+
     try {
-      const result = await api.submitInterviewAnswer(interviewId, {
+      const submitPromise = api.submitInterviewAnswer(interviewId, {
         question: currentQ.text,
         transcript: answer,
         answer,
@@ -1098,9 +1219,10 @@ async function startAIInterview() {
         questionPayload: currentQ,
         codingSubmission,
       })
+      inFlightSubmissionRef.current = submitPromise
+      const result = await submitPromise
 
       setEvaluation(result.evaluation || null)
-      setCompletedQs(prev => new Set([...prev, currentQ.id]))
       // Append 'You' text ONLY if not already added by handleVerbalAnswer
       setTranscript(prev => {
         const lastEntry = prev[prev.length - 1];
@@ -1123,6 +1245,9 @@ async function startAIInterview() {
       setQIndex(prev => prev + 1)
       setWorkspaceOpen(null)
       setEvaluation(null)
+      setLiveTranscript('')
+      setEditedTranscript('')
+      userEditedRef.current = false
       setStatus('ARIA is preparing the next question…')
 
       // ARIA speaks first; candidate recording starts after speech ends.
@@ -1133,6 +1258,7 @@ async function startAIInterview() {
       console.error(e)
       setStatus(e?.message || 'Answer processing failed')
     } finally {
+      inFlightSubmissionRef.current = null
       setBusy(false)
     }
   }
@@ -1141,25 +1267,45 @@ async function startAIInterview() {
     if (!currentQ || currentQ.type !== 'verbal' || busy) return
 
     setBusy(true)
-    setStatus('Transcribing and evaluating…')
 
     try {
-      const transcriptText = await stopAndTranscribeAnswer()
+      let finalText = ''
 
-      if (!transcriptText) {
-        setStatus('No speech detected. Please answer again.')
+      // If microphone is still recording, stop it and get Whisper transcription.
+      // If recording is already stopped AND the user edited the text, use their
+      // edited version directly (no re-transcription needed).
+      if (isListening) {
+        setStatus('Finalizing speech-to-text…')
+        const whisperText = await stopAndTranscribeAnswer()
+        if (userEditedRef.current && (questionDrafts[currentQ.id] || editedTranscript).trim()) {
+          finalText = (questionDrafts[currentQ.id] || editedTranscript).trim()
+        } else {
+          finalText = whisperText || (questionDrafts[currentQ.id] || editedTranscript).trim() || liveTranscriptRef.current.trim()
+        }
+      } else {
+        finalText = (questionDrafts[currentQ.id] || editedTranscript).trim() || liveTranscriptRef.current.trim()
+        setStatus('Submitting your answer…')
+      }
+
+      if (!finalText) {
+        setStatus('No answer detected. Please speak or type your answer before submitting.')
+        setBusy(false)
         return
       }
 
       setTranscript(prev => [
         ...prev,
-        { speaker: 'You', text: transcriptText },
+        { speaker: 'You', text: finalText },
       ])
 
+      setSavedAnswers(prev => ({ ...prev, [currentQ.id]: finalText }))
+      setQuestionDrafts(prev => ({ ...prev, [currentQ.id]: finalText }))
       setLiveTranscript('')
+      setEditedTranscript('')
+      userEditedRef.current = false
 
       setBusy(false)
-      await submitAnswer(transcriptText, 'verbal')
+      await submitAnswer(finalText, 'verbal')
     } catch (e: any) {
       console.error('Speech-to-text failed:', e)
       setStatus(e?.message || 'Speech-to-text failed')
@@ -1199,9 +1345,15 @@ async function startAIInterview() {
 
   const handleNext = () => {
     if (qIndex < questions.length - 1) {
+      if (isListening) {
+        stopAnswerRecordingOnly()
+      }
       const nextQ = questions[qIndex + 1]
       setQIndex(qIndex + 1)
       setWorkspaceOpen(null)
+      userEditedRef.current = false
+      setLiveTranscript('')
+      setEditedTranscript(savedAnswers[nextQ.id] || questionDrafts[nextQ.id] || '')
       setTranscript(prev => [...prev, { speaker: 'ARIA', text: nextQ.ariaIntro }])
       speakQuestion(nextQ.text, nextQ.type)
     }
@@ -1209,25 +1361,39 @@ async function startAIInterview() {
 
   const handlePrevious = () => {
     if (qIndex > 0) {
+      if (isListening) {
+        stopAnswerRecordingOnly()
+      }
+      const prevQ = questions[qIndex - 1]
       setQIndex(qIndex - 1)
       setWorkspaceOpen(null)
+      userEditedRef.current = false
+      setLiveTranscript('')
+      setEditedTranscript(savedAnswers[prevQ.id] || questionDrafts[prevQ.id] || '')
     }
   }
 
-  async function finishInterview() {
+  async function finishInterview(reason = 'candidate_ended_interview') {
+    interviewTerminatedRef.current = true
     try {
       window.speechSynthesis?.cancel()
-    } catch {}
+    } catch { }
     stopLiveRecognition()
     if (answerRecorderRef.current?.state === 'recording') {
-      try { answerRecorderRef.current.stop() } catch {}
+      try { answerRecorderRef.current.stop() } catch { }
     }
     setIsListening(false)
+    if (inFlightSubmissionRef.current) {
+      setStatus('Finalizing your answer submission…')
+      try {
+        await inFlightSubmissionRef.current
+      } catch { }
+    }
     setStatus('Saving interview report…')
 
     try {
       if (interviewId) {
-        await api.completeInterview(interviewId)
+        await api.completeInterview(interviewId, { reason })
       }
     } catch (e) {
       console.error('Interview completion save failed:', e)
@@ -1239,7 +1405,15 @@ async function startAIInterview() {
   }
 
   const handleEndInterview = async () => {
-    await finishInterview()
+    await finishInterview('candidate_ended_interview')
+  }
+
+  const handleDismissTabWarning = () => {
+    if (tabWarning?.isTermination) {
+      void finishInterview('tab_switching_violation')
+    } else {
+      setTabWarning(null)
+    }
   }
 
   const progress = plan?.total
@@ -1272,6 +1446,10 @@ async function startAIInterview() {
         @keyframes glowPulse {
           0%, 100% { box-shadow: 0 0 20px rgba(124,58,237,0.3); }
           50% { box-shadow: 0 0 40px rgba(124,58,237,0.6); }
+        }
+        @keyframes slideDownAlert {
+          from { transform: translateY(-30px); opacity: 0; }
+          to { transform: translateY(0); opacity: 1; }
         }
         .interview-room {
           background: #FAF9F5;
@@ -1453,8 +1631,14 @@ async function startAIInterview() {
                     border: i === qIndex ? '2px solid #7c3aed' : 'none',
                   }}
                   onClick={() => {
+                    if (isListening) {
+                      stopAnswerRecordingOnly()
+                    }
                     setQIndex(i)
                     setWorkspaceOpen(null)
+                    userEditedRef.current = false
+                    setLiveTranscript('')
+                    setEditedTranscript(savedAnswers[q.id] || questionDrafts[q.id] || '')
                   }}
                   title={q.category}
                 >
@@ -1497,116 +1681,116 @@ async function startAIInterview() {
               }}
             >
               {/* 30-SECOND PRE-LOADING & PREPARATION OVERLAY */}
-            {isPrepPhase && (
-              <div
-                style={{
-                  gridColumn: '1 / -1',
-                  background: 'linear-gradient(135deg, #0d0d1a, #1a1a2e)',
-                  borderRadius: isMobile ? '10px' : '14px',
-                  minHeight: isMobile ? '180px' : '280px',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  padding: isMobile ? '16px' : '24px',
-                  position: 'relative',
-                  overflow: 'hidden',
-                  border: '1px solid rgba(124,58,237,0.3)',
-                  boxShadow: '0 10px 40px rgba(0,0,0,0.4)',
-                }}
-              >
+              {isPrepPhase && (
                 <div
                   style={{
-                    width: isMobile ? '48px' : '64px',
-                    height: isMobile ? '48px' : '64px',
-                    borderRadius: '50%',
-                    background: 'linear-gradient(135deg, #7c3aed, #4f46e5)',
+                    gridColumn: '1 / -1',
+                    background: 'linear-gradient(135deg, #0d0d1a, #1a1a2e)',
+                    borderRadius: isMobile ? '10px' : '14px',
+                    minHeight: isMobile ? '180px' : '280px',
                     display: 'flex',
+                    flexDirection: 'column',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    boxShadow: '0 0 30px rgba(124,58,237,0.5)',
-                    marginBottom: '12px',
+                    padding: isMobile ? '16px' : '24px',
+                    position: 'relative',
+                    overflow: 'hidden',
+                    border: '1px solid rgba(124,58,237,0.3)',
+                    boxShadow: '0 10px 40px rgba(0,0,0,0.4)',
                   }}
                 >
-                  <BotAvatarIcon size={isMobile ? 24 : 32} color="#fff" />
-                </div>
-
-                <h3
-                  style={{
-                    fontSize: isMobile ? '15px' : '18px',
-                    fontWeight: 700,
-                    fontFamily: 'Outfit, sans-serif',
-                    color: '#ffffff',
-                    margin: '0 0 6px 0',
-                  }}
-                >
-                  ARIA Pre-loading AI Interview Question Bank...
-                </h3>
-
-                <p
-                  style={{
-                    fontSize: isMobile ? '11px' : '13px',
-                    color: '#a0a0c0',
-                    maxWidth: '460px',
-                    margin: '0 0 16px 0',
-                    textAlign: 'center',
-                    lineHeight: 1.4,
-                  }}
-                >
-                  Loading domain questions (Easy, Medium, Hard, Pseudocode & Coding) into backend session. Your interview begins in 30 seconds.
-                </p>
-
-                {/* COUNTDOWN TIMER */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '14px' }}>
                   <div
                     style={{
-                      background: 'rgba(124,58,237,0.15)',
-                      padding: '6px 18px',
-                      borderRadius: '100px',
-                      border: '1px solid rgba(124,58,237,0.4)',
-                      color: '#a78bfa',
-                      fontWeight: 800,
-                      fontSize: isMobile ? '16px' : '20px',
-                      fontFamily: 'JetBrains Mono, monospace',
+                      width: isMobile ? '48px' : '64px',
+                      height: isMobile ? '48px' : '64px',
+                      borderRadius: '50%',
+                      background: 'linear-gradient(135deg, #7c3aed, #4f46e5)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      boxShadow: '0 0 30px rgba(124,58,237,0.5)',
+                      marginBottom: '12px',
                     }}
                   >
-                    00:{prepCountdown < 10 ? `0${prepCountdown}` : prepCountdown}
+                    <BotAvatarIcon size={isMobile ? 24 : 32} color="#fff" />
                   </div>
-                </div>
 
-                {/* PROGRESS BAR */}
-                <div
-                  style={{
-                    width: '100%',
-                    maxWidth: '360px',
-                    height: '6px',
-                    background: 'rgba(255,255,255,0.08)',
-                    borderRadius: '100px',
-                    overflow: 'hidden',
-                    marginBottom: '12px',
-                  }}
-                >
+                  <h3
+                    style={{
+                      fontSize: isMobile ? '15px' : '18px',
+                      fontWeight: 700,
+                      fontFamily: 'Outfit, sans-serif',
+                      color: '#ffffff',
+                      margin: '0 0 6px 0',
+                    }}
+                  >
+                    ARIA Pre-loading AI Interview Question Bank...
+                  </h3>
+
+                  <p
+                    style={{
+                      fontSize: isMobile ? '11px' : '13px',
+                      color: '#a0a0c0',
+                      maxWidth: '460px',
+                      margin: '0 0 16px 0',
+                      textAlign: 'center',
+                      lineHeight: 1.4,
+                    }}
+                  >
+                    Loading domain questions (Easy, Medium, Hard, Pseudocode & Coding) into backend session. Your interview begins in 30 seconds.
+                  </p>
+
+                  {/* COUNTDOWN TIMER */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '14px' }}>
+                    <div
+                      style={{
+                        background: 'rgba(124,58,237,0.15)',
+                        padding: '6px 18px',
+                        borderRadius: '100px',
+                        border: '1px solid rgba(124,58,237,0.4)',
+                        color: '#a78bfa',
+                        fontWeight: 800,
+                        fontSize: isMobile ? '16px' : '20px',
+                        fontFamily: 'JetBrains Mono, monospace',
+                      }}
+                    >
+                      00:{prepCountdown < 10 ? `0${prepCountdown}` : prepCountdown}
+                    </div>
+                  </div>
+
+                  {/* PROGRESS BAR */}
                   <div
                     style={{
-                      height: '100%',
-                      width: `${((30 - prepCountdown) / 30) * 100}%`,
-                      background: 'linear-gradient(90deg, #7c3aed, #10b981)',
-                      transition: 'width 1s linear',
+                      width: '100%',
+                      maxWidth: '360px',
+                      height: '6px',
+                      background: 'rgba(255,255,255,0.08)',
+                      borderRadius: '100px',
+                      overflow: 'hidden',
+                      marginBottom: '12px',
                     }}
-                  />
-                </div>
+                  >
+                    <div
+                      style={{
+                        height: '100%',
+                        width: `${((30 - prepCountdown) / 30) * 100}%`,
+                        background: 'linear-gradient(90deg, #7c3aed, #10b981)',
+                        transition: 'width 1s linear',
+                      }}
+                    />
+                  </div>
 
-                <div style={{ fontSize: isMobile ? '10px' : '11px', color: '#6a6a8a', fontFamily: 'Inter, sans-serif' }}>
-                  {prepCountdown > 20
-                    ? '⚡ [1/3] Initializing Camera & Proctoring Feeds...'
-                    : prepCountdown > 10
-                      ? '⚡ [2/3] Pre-loading 15-Question Bank from Groq LLM Backend...'
-                      : '⚡ [3/3] Finalizing Session & Voice Synthesis Model...'}
+                  <div style={{ fontSize: isMobile ? '10px' : '11px', color: '#6a6a8a', fontFamily: 'Inter, sans-serif' }}>
+                    {prepCountdown > 20
+                      ? '⚡ [1/3] Initializing Camera & Proctoring Feeds...'
+                      : prepCountdown > 10
+                        ? '⚡ [2/3] Pre-loading 15-Question Bank from Groq LLM Backend...'
+                        : '⚡ [3/3] Finalizing Session & Voice Synthesis Model...'}
+                  </div>
                 </div>
-              </div>
-            )}
+              )}
 
-            {/* ARIA - AI Interviewer */}
+              {/* ARIA - AI Interviewer */}
               <div
                 className="video-panel"
                 style={{
@@ -1834,27 +2018,27 @@ async function startAIInterview() {
                           currentQ.difficultyTier === 'Easy'
                             ? '#ecfdf5'
                             : currentQ.difficultyTier === 'Medium'
-                            ? '#fffbeb'
-                            : '#fef2f2',
+                              ? '#fffbeb'
+                              : '#fef2f2',
                         color:
                           currentQ.difficultyTier === 'Easy'
                             ? '#059669'
                             : currentQ.difficultyTier === 'Medium'
-                            ? '#d97706'
-                            : '#dc2626',
+                              ? '#d97706'
+                              : '#dc2626',
                         border:
                           currentQ.difficultyTier === 'Easy'
                             ? '1px solid #a7f3d0'
                             : currentQ.difficultyTier === 'Medium'
-                            ? '1px solid #fde68a'
-                            : '1px solid #fecaca',
+                              ? '1px solid #fde68a'
+                              : '1px solid #fecaca',
                       }}
                     >
                       {currentQ.difficultyTier === 'Easy'
                         ? '🌱 Easy'
                         : currentQ.difficultyTier === 'Medium'
-                        ? '⚡ Medium'
-                        : '🔥 Hard'}
+                          ? '⚡ Medium'
+                          : '🔥 Hard'}
                     </span>
                   )}
                 </div>
@@ -1970,131 +2154,201 @@ async function startAIInterview() {
                   padding: isMobile ? '8px 0' : '10px 0',
                 }}
               >
-                <div
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 8,
-                    flexWrap: 'wrap',
-                  }}
-                >
-                  <button
-                    onClick={() => void startAnswerRecording()}
-                    disabled={busy || isAriaSpeaking || isListening}
-                    className="nav-btn"
-                    style={{
-                      padding: isMobile ? '7px 12px' : '9px 16px',
-                      borderRadius: '8px',
-                      border: '1px solid rgba(124,58,237,0.2)',
-                      background: isListening ? 'rgba(124,58,237,0.08)' : '#fff',
-                      color: '#7c3aed',
-                      cursor: busy || isAriaSpeaking || isListening ? 'not-allowed' : 'pointer',
-                      fontSize: isMobile ? '11px' : '13px',
-                      fontFamily: 'Inter, sans-serif',
-                      fontWeight: 600,
-                      opacity: busy || isAriaSpeaking ? 0.55 : 1,
-                    }}
-                  >
-                    🎙️ {isListening ? 'Listening…' : 'Start Listening'}
-                  </button>
-
-                  <button
-                    onClick={stopAnswerRecordingOnly}
-                    disabled={!isListening || busy}
-                    className="nav-btn"
-                    style={{
-                      padding: isMobile ? '7px 12px' : '9px 16px',
-                      borderRadius: '8px',
-                      border: '1px solid rgba(239,68,68,0.2)',
-                      background: isListening ? 'rgba(239,68,68,0.06)' : '#fff',
-                      color: '#ef4444',
-                      cursor: !isListening || busy ? 'not-allowed' : 'pointer',
-                      fontSize: isMobile ? '11px' : '13px',
-                      fontFamily: 'Inter, sans-serif',
-                      fontWeight: 600,
-                      opacity: !isListening || busy ? 0.45 : 1,
-                    }}
-                  >
-                    ⏹ Stop
-                  </button>
-
-                  <button
-                    onClick={() => void handleVerbalAnswer()}
-                    disabled={busy || (!isListening && !liveTranscript.trim()) || isTranscribing}
-                    className="nav-btn"
-                    style={{
-                      padding: isMobile ? '7px 14px' : '9px 18px',
-                      borderRadius: '8px',
-                      border: 'none',
-                      background: 'linear-gradient(135deg, #7c3aed, #4f46e5)',
-                      color: '#fff',
-                      cursor: busy || (!isListening && !liveTranscript.trim()) ? 'not-allowed' : 'pointer',
-                      fontSize: isMobile ? '11px' : '13px',
-                      fontFamily: 'Inter, sans-serif',
-                      fontWeight: 600,
-                      opacity: busy || (!isListening && !liveTranscript.trim()) ? 0.5 : 1,
-                    }}
-                  >
-                    {isTranscribing ? 'Transcribing…' : 'Finish & Submit →'}
-                  </button>
-
-                  <span
-                    style={{
-                      fontSize: isMobile ? '10px' : '11px',
-                      color: isListening ? '#10b981' : '#8a8aa8',
-                      fontWeight: 600,
-                    }}
-                  >
-                    {isListening ? '● Live' : isAriaSpeaking ? 'ARIA speaking' : 'Ready'}
-                  </span>
-                </div>
-
-                <div
-                  style={{
-                    border: '1px solid rgba(6,182,212,0.14)',
-                    background: 'rgba(6,182,212,0.035)',
-                    borderRadius: '10px',
-                    padding: isMobile ? '8px 10px' : '10px 12px',
-                    minHeight: isMobile ? '44px' : '52px',
-                    maxHeight: isMobile ? '110px' : '130px',
-                    overflowY: 'auto',
-                  }}
-                >
+                {isCompleted ? (
                   <div
                     style={{
-                      fontSize: '9px',
-                      fontWeight: 700,
-                      color: '#06b6d4',
-                      textTransform: 'uppercase',
-                      letterSpacing: '0.06em',
-                      marginBottom: '4px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      padding: '8px 14px',
+                      borderRadius: '8px',
+                      background: 'rgba(16,185,129,0.08)',
+                      border: '1px solid rgba(16,185,129,0.25)',
                     }}
                   >
-                    Live transcript
-                  </div>
-                  <div
-                    style={{
-                      fontSize: isMobile ? '11px' : '13px',
-                      lineHeight: 1.55,
-                      color: liveTranscript ? '#27324a' : '#9aa0b5',
-                      wordBreak: 'break-word',
-                    }}
-                  >
-                    {liveTranscript || 'Your speech will appear here as you speak…'}
-                    {isListening && (
-                      <span
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#10b981', fontWeight: 600, fontSize: isMobile ? '12px' : '13px' }}>
+                      <span>✓</span>
+                      <span>Answer Submitted & Saved</span>
+                    </div>
+                    {qIndex < questions.length - 1 && (
+                      <button
+                        onClick={handleNext}
+                        className="nav-btn"
                         style={{
-                          display: 'inline-block',
-                          width: '5px',
-                          height: '5px',
-                          borderRadius: '50%',
-                          background: '#06b6d4',
-                          marginLeft: '5px',
-                          animation: 'pulse 1s infinite',
+                          padding: isMobile ? '5px 10px' : '6px 12px',
+                          borderRadius: '6px',
+                          border: 'none',
+                          background: '#7c3aed',
+                          color: '#fff',
+                          fontSize: isMobile ? '11px' : '12px',
+                          cursor: 'pointer',
+                          fontWeight: 600,
                         }}
-                      />
+                      >
+                        Next Question →
+                      </button>
                     )}
                   </div>
+                ) : (
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 8,
+                      flexWrap: 'wrap',
+                    }}
+                  >
+                    <button
+                      onClick={() => void startAnswerRecording()}
+                      disabled={busy || isAriaSpeaking || isListening}
+                      className="nav-btn"
+                      style={{
+                        padding: isMobile ? '7px 12px' : '9px 16px',
+                        borderRadius: '8px',
+                        border: '1px solid rgba(124,58,237,0.2)',
+                        background: isListening ? 'rgba(124,58,237,0.08)' : '#fff',
+                        color: '#7c3aed',
+                        cursor: busy || isAriaSpeaking || isListening ? 'not-allowed' : 'pointer',
+                        fontSize: isMobile ? '11px' : '13px',
+                        fontFamily: 'Inter, sans-serif',
+                        fontWeight: 600,
+                        opacity: busy || isAriaSpeaking ? 0.55 : 1,
+                      }}
+                    >
+                      🎙️ {isListening ? 'Listening…' : 'Start Listening'}
+                    </button>
+
+                    <button
+                      onClick={stopAnswerRecordingOnly}
+                      disabled={!isListening || busy}
+                      className="nav-btn"
+                      style={{
+                        padding: isMobile ? '7px 12px' : '9px 16px',
+                        borderRadius: '8px',
+                        border: '1px solid rgba(239,68,68,0.2)',
+                        background: isListening ? 'rgba(239,68,68,0.06)' : '#fff',
+                        color: '#ef4444',
+                        cursor: !isListening || busy ? 'not-allowed' : 'pointer',
+                        fontSize: isMobile ? '11px' : '13px',
+                        fontFamily: 'Inter, sans-serif',
+                        fontWeight: 600,
+                        opacity: !isListening || busy ? 0.45 : 1,
+                      }}
+                    >
+                      ⏹ Stop
+                    </button>
+
+                    <button
+                      onClick={() => void handleVerbalAnswer()}
+                      disabled={busy || isTranscribing || (!isListening && !((questionDrafts[currentQ.id] ?? editedTranscript).trim() || liveTranscript.trim()))}
+                      className="nav-btn"
+                      style={{
+                        padding: isMobile ? '7px 14px' : '9px 18px',
+                        borderRadius: '8px',
+                        border: 'none',
+                        background: 'linear-gradient(135deg, #7c3aed, #4f46e5)',
+                        color: '#fff',
+                        cursor: busy || (!isListening && !((questionDrafts[currentQ.id] ?? editedTranscript).trim() || liveTranscript.trim())) ? 'not-allowed' : 'pointer',
+                        fontSize: isMobile ? '11px' : '13px',
+                        fontFamily: 'Inter, sans-serif',
+                        fontWeight: 600,
+                        opacity: busy || (!isListening && !((questionDrafts[currentQ.id] ?? editedTranscript).trim() || liveTranscript.trim())) ? 0.5 : 1,
+                      }}
+                    >
+                      {isTranscribing ? 'Transcribing…' : 'Finish & Submit →'}
+                    </button>
+
+                    <span
+                      style={{
+                        fontSize: isMobile ? '10px' : '11px',
+                        color: isListening ? '#10b981' : '#8a8aa8',
+                        fontWeight: 600,
+                      }}
+                    >
+                      {isListening ? '● Live' : isAriaSpeaking ? 'ARIA speaking' : 'Ready'}
+                    </span>
+                  </div>
+                )}
+
+                <div
+                  style={{
+                    border: '1px solid rgba(6,182,212,0.20)',
+                    background: 'rgba(6,182,212,0.04)',
+                    borderRadius: '10px',
+                    padding: isMobile ? '8px 10px' : '10px 12px',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
+                    <div
+                      style={{
+                        fontSize: '9px',
+                        fontWeight: 700,
+                        color: '#06b6d4',
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.06em',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                      }}
+                    >
+                      Your Answer
+                      {isListening && (
+                        <span
+                          style={{
+                            display: 'inline-block',
+                            width: '5px',
+                            height: '5px',
+                            borderRadius: '50%',
+                            background: '#06b6d4',
+                            animation: 'pulse 1s infinite',
+                          }}
+                        />
+                      )}
+                    </div>
+                    <span style={{ fontSize: '9px', color: '#8a8aa8', fontStyle: 'italic' }}>
+                      {isCompleted
+                        ? 'Submitted'
+                        : isListening
+                          ? 'Listening… Click Stop to edit'
+                          : 'You can edit before submitting'}
+                    </span>
+                  </div>
+                  <textarea
+                    value={isCompleted ? (savedAnswers[currentQ.id] || editedTranscript) : (questionDrafts[currentQ.id] ?? editedTranscript)}
+                    onChange={e => {
+                      if (isCompleted) return;
+                      const val = e.target.value;
+                      userEditedRef.current = true;
+                      setEditedTranscript(val);
+                      setQuestionDrafts(prev => ({ ...prev, [currentQ.id]: val }));
+                    }}
+                    readOnly={isCompleted || isListening}
+                    placeholder={
+                      isCompleted
+                        ? 'Your submitted answer.'
+                        : isListening
+                          ? 'Your speech will appear here as you speak… Click Stop to edit.'
+                          : 'Speak your answer, then edit here if needed before submitting…'
+                    }
+                    rows={4}
+                    style={{
+                      width: '100%',
+                      fontSize: isMobile ? '11px' : '13px',
+                      lineHeight: 1.6,
+                      color: (isCompleted ? savedAnswers[currentQ.id] : (questionDrafts[currentQ.id] ?? editedTranscript)) ? '#27324a' : '#9aa0b5',
+                      background: isListening ? 'transparent' : isCompleted ? 'rgba(16,185,129,0.03)' : 'rgba(255,255,255,0.7)',
+                      border: isListening ? 'none' : isCompleted ? '1px solid rgba(16,185,129,0.2)' : '1px solid rgba(6,182,212,0.25)',
+                      borderRadius: '6px',
+                      padding: isListening ? '0' : '8px',
+                      resize: isCompleted ? 'none' : 'vertical',
+                      outline: 'none',
+                      fontFamily: 'Inter, sans-serif',
+                      cursor: isListening || isCompleted ? 'default' : 'text',
+                      minHeight: isMobile ? '60px' : '80px',
+                      boxSizing: 'border-box',
+                      transition: 'all 0.2s',
+                    }}
+                  />
                 </div>
               </div>
             )}
@@ -2444,6 +2698,156 @@ async function startAIInterview() {
           />
         )}
 
+        {/* TAB SWITCH WARNING ALERT (Pinned at top of screen) */}
+        {tabWarning?.open && (
+          <div
+            style={{
+              position: 'fixed',
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              background: 'rgba(15, 23, 42, 0.6)',
+              backdropFilter: 'blur(6px)',
+              WebkitBackdropFilter: 'blur(6px)',
+              zIndex: 999999,
+              display: 'flex',
+              alignItems: 'flex-start',
+              justifyContent: 'center',
+              paddingTop: isMobile ? '16px' : '32px',
+              paddingLeft: '16px',
+              paddingRight: '16px',
+            }}
+          >
+            <div
+              style={{
+                maxWidth: '520px',
+                width: '100%',
+                background: tabWarning.count === 1
+                  ? '#FFFBEB'
+                  : tabWarning.count === 2
+                    ? '#FEF2F2'
+                    : '#18181B',
+                border: tabWarning.count === 1
+                  ? '2px solid #F59E0B'
+                  : tabWarning.count === 2
+                    ? '2px solid #EF4444'
+                    : '2px solid #DC2626',
+                borderRadius: '16px',
+                padding: isMobile ? '18px 16px' : '22px 24px',
+                boxShadow: tabWarning.count === 1
+                  ? '0 20px 45px rgba(245, 158, 11, 0.28)'
+                  : tabWarning.count === 2
+                    ? '0 20px 45px rgba(239, 68, 68, 0.35)'
+                    : '0 25px 60px rgba(220, 38, 38, 0.5)',
+                color: tabWarning.count >= 3 ? '#fff' : '#18181B',
+                fontFamily: 'Inter, sans-serif',
+                animation: 'slideDownAlert 0.3s cubic-bezier(0.16, 1, 0.3, 1)',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: '14px', marginBottom: '12px' }}>
+                <div
+                  style={{
+                    width: '40px',
+                    height: '40px',
+                    borderRadius: '10px',
+                    background: tabWarning.count === 1
+                      ? 'rgba(245, 158, 11, 0.15)'
+                      : tabWarning.count === 2
+                        ? 'rgba(239, 68, 68, 0.15)'
+                        : 'rgba(220, 38, 38, 0.25)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: '22px',
+                    flexShrink: 0,
+                  }}
+                >
+                  {tabWarning.count === 1 ? '⚠️' : tabWarning.count === 2 ? '🚨' : '⛔'}
+                </div>
+                <div style={{ flex: 1 }}>
+                  <h3
+                    style={{
+                      margin: '0 0 4px 0',
+                      fontSize: isMobile ? '15px' : '17px',
+                      fontWeight: 700,
+                      color: tabWarning.count === 1
+                        ? '#B45309'
+                        : tabWarning.count === 2
+                          ? '#DC2626'
+                          : '#EF4444',
+                    }}
+                  >
+                    {tabWarning.title}
+                  </h3>
+                  <div style={{ fontSize: '11px', color: tabWarning.count >= 3 ? '#A1A1AA' : '#6B7280', fontWeight: 500 }}>
+                    Security Proctor Violation
+                  </div>
+                </div>
+              </div>
+
+              <p
+                style={{
+                  margin: '0 0 16px 0',
+                  fontSize: isMobile ? '13px' : '14px',
+                  lineHeight: 1.6,
+                  color: tabWarning.count >= 3 ? '#E4E4E7' : '#374151',
+                }}
+              >
+                {tabWarning.message}
+              </p>
+
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  paddingTop: '12px',
+                  borderTop: `1px solid ${tabWarning.count >= 3 ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.08)'}`,
+                }}
+              >
+                <div
+                  style={{
+                    fontSize: '12px',
+                    fontWeight: 700,
+                    color: tabWarning.count === 1
+                      ? '#D97706'
+                      : tabWarning.count === 2
+                        ? '#EF4444'
+                        : '#F87171',
+                  }}
+                >
+                  {tabWarning.count < 3 ? `Strike ${tabWarning.count} of 2 (3rd terminates)` : 'Session Terminated'}
+                </div>
+
+                <button
+                  onClick={handleDismissTabWarning}
+                  style={{
+                    padding: isMobile ? '8px 20px' : '10px 26px',
+                    borderRadius: '8px',
+                    border: 'none',
+                    background: tabWarning.count === 1
+                      ? '#F59E0B'
+                      : tabWarning.count === 2
+                        ? '#EF4444'
+                        : '#DC2626',
+                    color: '#fff',
+                    fontWeight: 700,
+                    fontSize: isMobile ? '12px' : '13px',
+                    cursor: 'pointer',
+                    boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                    transition: 'all 0.15s ease',
+                  }}
+                  onMouseEnter={e => (e.currentTarget.style.opacity = '0.9')}
+                  onMouseLeave={e => (e.currentTarget.style.opacity = '1')}
+                >
+                  {tabWarning.count >= 3 ? 'View Report →' : 'OK'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* END MODAL */}
         {showEndModal && (
           <div
@@ -2546,26 +2950,26 @@ function CodingWorkspace({
 }) {
   const defaultLanguage = String(question?.language || question?.problem?.language || 'python').toLowerCase()
   const [lang, setLang] = useState(defaultLanguage === 'javascript' ? 'JavaScript' : defaultLanguage === 'cpp' ? 'C++' : defaultLanguage === 'java' ? 'Java' : 'Python')
-const initialCode =
-  question?.problem?.starterCode?.[defaultLanguage] ||
-  question?.problem?.starterCode?.python ||
-  [
-    'def longest_substring_without_repeating(s: str) -> int:',
-    '    """',
-    '    Find the length of the longest substring without repeating characters.',
-    '    """',
-    '    char_map = {}',
-    '    left = 0',
-    '    max_len = 0',
-    '',
-    '    for right, char in enumerate(s):',
-    '        if char in char_map and char_map[char] >= left:',
-    '            left = char_map[char] + 1',
-    '        char_map[char] = right',
-    '        max_len = max(max_len, right - left + 1)',
-    '',
-    '    return max_len',
-  ].join('\n')
+  const initialCode =
+    question?.problem?.starterCode?.[defaultLanguage] ||
+    question?.problem?.starterCode?.python ||
+    [
+      'def longest_substring_without_repeating(s: str) -> int:',
+      '    """',
+      '    Find the length of the longest substring without repeating characters.',
+      '    """',
+      '    char_map = {}',
+      '    left = 0',
+      '    max_len = 0',
+      '',
+      '    for right, char in enumerate(s):',
+      '        if char in char_map and char_map[char] >= left:',
+      '            left = char_map[char] + 1',
+      '        char_map[char] = right',
+      '        max_len = max(max_len, right - left + 1)',
+      '',
+      '    return max_len',
+    ].join('\n')
   const [code, setCode] = useState(initialCode)
 
   const [ran, setRan] = useState(false)
@@ -2969,10 +3373,10 @@ ORDER BY avg_salary DESC;`
 
   const schema = Array.isArray(question?.problem?.dbSchema)
     ? question.problem.dbSchema.map((table: any) => ({
-        name: table.tableName || table.name || 'Table',
-        cols: Array.isArray(table.columns) ? table.columns : [],
-        rows: table.sampleRows || [],
-      }))
+      name: table.tableName || table.name || 'Table',
+      cols: Array.isArray(table.columns) ? table.columns : [],
+      rows: table.sampleRows || [],
+    }))
     : []
 
   const results = [

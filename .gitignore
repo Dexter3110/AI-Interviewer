@@ -1,6 +1,7 @@
 node_modules/
 backend/node_modules/
 backend/uploads/
+backend/data/*.csv
 __pycache__/
 *.pyc
 dist/
@@ -10,6 +11,7 @@ build/
 .env.*
 backend/.env
 backend/.env.*
+!backend/.env.example
 .vite/
 vite.config.*.timestamp-*
 *.tsbuildinfo

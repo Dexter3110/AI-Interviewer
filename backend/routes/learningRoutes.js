@@ -9,6 +9,15 @@ const {
 } = require("../controllers/learningController");
 
 const { requireAuth } = require("../middleware/authMiddleware");
+const courses = require("../controllers/coursesController");
+
+router.get("/recommendations", requireAuth, courses.recommendations);
+router.get("/certificates", requireAuth, courses.certificates);
+router.get("/search", requireAuth, courses.search);
+router.get("/saved", requireAuth, courses.saved);
+router.post("/interests", requireAuth, courses.saveInterests);
+router.post("/courses/:id/:action", requireAuth, courses.addActivity);
+router.delete("/courses/:id/:action", requireAuth, courses.removeActivity);
 
 // ============================================================
 // PROFILE
