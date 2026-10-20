@@ -1,5 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { Screen } from '../types'
+import { api } from '../api/api'
 import {
   Code2,
   Database,
@@ -26,6 +27,10 @@ interface TestCase {
   actual?: string
   status?: 'passed' | 'failed' | 'pending'
   executionTimeMs?: number
+  args?: unknown[]
+  stdin?: string
+  setupSql?: string
+  query?: string
 }
 
 interface Problem {
@@ -40,6 +45,8 @@ interface Problem {
   examples: { input: string; output: string; explanation?: string }[]
   starterCode: string
   testCases: TestCase[]
+  functionName?: string
+  className?: string
 }
 
 function getStarterSyntaxTemplate(title: string, language: string, mode: 'coding' | 'sql'): string {
@@ -63,6 +70,7 @@ FROM
         return 0;
     }
 }
+
 `
     }
     if (title.includes('Two Sum')) {
@@ -229,6 +237,33 @@ func maxSubArray(nums []int) int {
   return `// Write your solution here for ${title}\n`
 }
 
+function displayText(value: unknown): string {
+  if (typeof value === 'string') return value
+  if (value == null) return ''
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  try {
+    return JSON.stringify(value, null, 2) ?? String(value)
+  } catch {
+    return String(value)
+  }
+}
+
+function departmentSqlCase(id: number, input: string, employees: Array<[string, number | null, number]>, expected: Array<{ Department: string; Employee: string; Salary: number }>): TestCase {
+  const employeeRows = employees.map(([name, salary, department], index) => `(${index + 1}, '${name}', ${salary === null ? 'NULL' : salary}, ${department})`).join(', ')
+  return {
+    id, input, expected: JSON.stringify(expected),
+    setupSql: `CREATE TABLE Department (id INTEGER, name TEXT); CREATE TABLE Employee (id INTEGER, name TEXT, salary INTEGER, departmentId INTEGER); INSERT INTO Department VALUES (1, 'IT'), (2, 'Sales'); INSERT INTO Employee VALUES ${employeeRows};`,
+  }
+}
+
+function mauSqlCase(id: number, input: string, rows: Array<[number, string]>, expectedCount: number): TestCase {
+  const actions = rows.map(([user, date], index) => `(${index + 1}, ${user}, 'event', '${date}')`).join(', ')
+  return {
+    id, input, expected: JSON.stringify([{ monthly_active_users: expectedCount }]),
+    setupSql: `CREATE TABLE user_actions (event_id INTEGER, user_id INTEGER, event_type TEXT, event_date TEXT); INSERT INTO user_actions VALUES ${actions};`,
+  }
+}
+
 const PRESET_PROBLEMS: Problem[] = [
   {
     id: 'coding-1',
@@ -293,7 +328,7 @@ const PRESET_PROBLEMS: Problem[] = [
     mode: 'sql',
     category: 'SQL Aggregations & Joins',
     difficulty: 'Hard',
-    language: 'PostgreSQL',
+    language: 'SQLite',
     description:
       'Write an SQL query to find employees who have the highest salary in each of the departments.\n\nReturn the result table in any order containing Department Name, Employee Name, and Salary.',
     constraints: [
@@ -310,11 +345,11 @@ const PRESET_PROBLEMS: Problem[] = [
     ],
     starterCode: getStarterSyntaxTemplate('Highest Earning Employee per Department', 'PostgreSQL', 'sql'),
     testCases: [
-      { id: 1, input: 'Standard Department Test', expected: '2 rows matched' },
-      { id: 2, input: 'Multiple Highest Earners Tie Test', expected: '3 rows matched' },
-      { id: 3, input: 'Single Employee Department Test', expected: '1 row matched' },
-      { id: 4, input: 'Null Salary Filter Test', expected: 'Passed' },
-      { id: 5, input: 'Multi-Department Join Efficiency Test', expected: 'Passed (0.04s)' },
+      departmentSqlCase(1, 'Standard department maxima', [['Joe', 70000, 1], ['Jim', 90000, 1], ['Henry', 80000, 2]], [{ Department: 'IT', Employee: 'Jim', Salary: 90000 }, { Department: 'Sales', Employee: 'Henry', Salary: 80000 }]),
+      departmentSqlCase(2, 'Tied highest salaries', [['Amy', 100000, 1], ['Bob', 100000, 1], ['Cal', 80000, 2]], [{ Department: 'IT', Employee: 'Amy', Salary: 100000 }, { Department: 'IT', Employee: 'Bob', Salary: 100000 }, { Department: 'Sales', Employee: 'Cal', Salary: 80000 }]),
+      departmentSqlCase(3, 'Single employee department', [['Lee', 50000, 1]], [{ Department: 'IT', Employee: 'Lee', Salary: 50000 }]),
+      departmentSqlCase(4, 'Null salary rows', [['Nia', null, 1], ['Sam', 60000, 1]], [{ Department: 'IT', Employee: 'Sam', Salary: 60000 }]),
+      departmentSqlCase(5, 'Multiple department join', [['Ari', 30000, 1], ['Bo', 45000, 1], ['Cy', 70000, 2], ['Dee', 65000, 2]], [{ Department: 'IT', Employee: 'Bo', Salary: 45000 }, { Department: 'Sales', Employee: 'Cy', Salary: 70000 }]),
     ],
   },
   {
@@ -323,7 +358,7 @@ const PRESET_PROBLEMS: Problem[] = [
     mode: 'sql',
     category: 'Window Functions & Date Math',
     difficulty: 'Medium',
-    language: 'SQL',
+    language: 'SQLite',
     description:
       'Write an SQL query to calculate the count of Monthly Active Users who performed an event in both June 2024 and July 2024.\n\nUse the `user_actions` table containing `user_id`, `event_id`, `event_type`, and `event_date`.',
     constraints: [
@@ -336,153 +371,18 @@ const PRESET_PROBLEMS: Problem[] = [
     ],
     starterCode: getStarterSyntaxTemplate('Calculate Monthly Active Users (MAU) Retention', 'SQL', 'sql'),
     testCases: [
-      { id: 1, input: 'June vs July User Retention Test', expected: 'Passed' },
-      { id: 2, input: 'Inactive Users Filtering Test', expected: 'Passed' },
-      { id: 3, input: 'Distinct User Deduplication Test', expected: 'Passed' },
-      { id: 4, input: 'Year Boundary Verification', expected: 'Passed' },
-      { id: 5, input: 'Query Performance & Index Utilization', expected: 'Passed' },
+      mauSqlCase(1, 'Users active in both June and July', [[1, '2024-06-04'], [1, '2024-07-08'], [2, '2024-06-20'], [2, '2024-07-11'], [3, '2024-06-10']], 2),
+      mauSqlCase(2, 'Users active in June only are excluded', [[1, '2024-06-04'], [1, '2024-07-08'], [2, '2024-06-20']], 1),
+      mauSqlCase(3, 'Repeated actions count each user once', [[1, '2024-06-04'], [1, '2024-06-05'], [1, '2024-07-08'], [1, '2024-07-09']], 1),
+      mauSqlCase(4, 'Dates in other years are excluded', [[1, '2023-06-04'], [1, '2023-07-08'], [2, '2024-06-04'], [2, '2024-07-08']], 1),
+      mauSqlCase(5, 'No overlap returns zero', [[1, '2024-06-01'], [2, '2024-07-01']], 0),
     ],
   },
 ]
 
-function evaluateSubmission(code: string, _language: string, problem: Problem) {
-  const cleanCode = (code || '').trim()
-
-  // 1. Check for unwritten starter code or TODO comments
-  const hasTodo =
-    cleanCode.includes('TODO:') ||
-    cleanCode.includes('// Write your solution here') ||
-    cleanCode.includes('# Write your solution here') ||
-    cleanCode.includes('pass')
-
-  // 2. Check for simple hardcoded return literal (e.g. return 98989898; return 0; return [];)
-  // without any actual control flow or problem logic
-  const returnMatch = cleanCode.match(/return\s+([^;{\n]+);?/)
-  const hasLoopOrLogic =
-    cleanCode.includes('for') ||
-    cleanCode.includes('while') ||
-    cleanCode.includes('map(') ||
-    cleanCode.includes('Math.') ||
-    cleanCode.includes('SELECT') ||
-    cleanCode.includes('JOIN') ||
-    cleanCode.includes('WHERE') ||
-    cleanCode.includes('len(') ||
-    cleanCode.includes('range(')
-
-  const isHardcodedLiteral = returnMatch && !hasLoopOrLogic
-  const hardcodedValue = returnMatch ? returnMatch[1].trim() : ''
-
-  // Execute test cases
-  const updatedCases: TestCase[] = problem.testCases.map(tc => {
-    let isPass = false
-    let actualOutput = ''
-
-    if (hasTodo) {
-      isPass = false
-      actualOutput = 'Incomplete Code (TODO stub)'
-    } else if (isHardcodedLiteral) {
-      actualOutput = hardcodedValue || 'Hardcoded return'
-      // Only passes if expected output matches hardcoded string
-      isPass = String(tc.expected).trim() === actualOutput.trim()
-    } else {
-      // Evaluate based on problem domain & user logic
-      const title = problem.title.toLowerCase()
-
-      if (title.includes('maximum subarray sum')) {
-        // Evaluate Max Subarray Sum
-        const hasKadaneLogic =
-          (cleanCode.includes('max') || cleanCode.includes('Math.max') || cleanCode.includes('curr')) &&
-          (cleanCode.includes('for') || cleanCode.includes('while') || cleanCode.includes('range'))
-
-        if (hasKadaneLogic) {
-          isPass = true
-          actualOutput = tc.expected
-        } else {
-          isPass = false
-          actualOutput = hardcodedValue || 'Output Mismatch'
-        }
-      } else if (title.includes('longest substring')) {
-        const hasSlidingWindow =
-          (cleanCode.includes('Set') || cleanCode.includes('Map') || cleanCode.includes('indexOf') || cleanCode.includes('seen') || cleanCode.includes('left') || cleanCode.includes('len')) &&
-          (cleanCode.includes('for') || cleanCode.includes('while'))
-
-        if (hasSlidingWindow) {
-          isPass = true
-          actualOutput = tc.expected
-        } else {
-          isPass = false
-          actualOutput = hardcodedValue || '0 (Mismatch output)'
-        }
-      } else if (title.includes('two sum')) {
-        const hasMapOrDoubleLoop =
-          cleanCode.includes('map') ||
-          cleanCode.includes('HashMap') ||
-          cleanCode.includes('dict') ||
-          cleanCode.includes('for')
-
-        if (hasMapOrDoubleLoop) {
-          isPass = true
-          actualOutput = tc.expected
-        } else {
-          isPass = false
-          actualOutput = hardcodedValue || '[] (Mismatch output)'
-        }
-      } else if (problem.mode === 'sql') {
-        const hasSQLStructure =
-          cleanCode.toUpperCase().includes('SELECT') &&
-          cleanCode.toUpperCase().includes('FROM')
-
-        if (hasSQLStructure) {
-          isPass = true
-          actualOutput = tc.expected
-        } else {
-          isPass = false
-          actualOutput = 'Invalid SQL Query Syntax'
-        }
-      } else {
-        isPass = cleanCode.length > 40 && hasLoopOrLogic
-        actualOutput = isPass ? tc.expected : 'Execution failed'
-      }
-    }
-
-    return {
-      ...tc,
-      status: isPass ? ('passed' as const) : ('failed' as const),
-      actual: actualOutput,
-      executionTimeMs: Math.floor(Math.random() * 20) + 4,
-    }
-  })
-
-  const passedCount = updatedCases.filter(t => t.status === 'passed').length
-  const totalCount = updatedCases.length
-  const score = Math.round((passedCount / totalCount) * 100)
-
-  let feedback = ''
-  if (score === 100) {
-    feedback = '🎉 All 5 verification test cases passed! Your algorithm logic runs in optimal complexity.'
-  } else if (score >= 60) {
-    feedback = `Passed ${passedCount} of ${totalCount} test cases. Review output discrepancies on failed test cases.`
-  } else if (hasTodo) {
-    feedback = '⚠️ Solution incomplete. Please finish writing your solution logic before running test cases.'
-  } else if (isHardcodedLiteral) {
-    feedback = `❌ Solution failed verification (0/5 passed). Your code returned a hardcoded value ("${hardcodedValue}") instead of calculating the dynamic result.`
-  } else {
-    feedback = `❌ Solution failed verification (${passedCount}/${totalCount} passed). Output mismatch detected.`
-  }
-
-  const complexity = problem.mode === 'sql' ? 'Index Scan · 0.02s' : 'O(N) Time · O(1) Space'
-
-  return {
-    testCases: updatedCases,
-    score,
-    passedCount,
-    totalCount,
-    complexity,
-    feedback,
-  }
-}
-
 export default function CodingSQLPractice({ onNavigate: _onNavigate }: Props) {
+  const leftPaneRef = useRef<HTMLDivElement>(null)
+  const [generationCount, setGenerationCount] = useState(0)
   const [activeTab, setActiveTab] = useState<'coding' | 'sql'>('coding')
   const [currentProblemIndex, setCurrentProblemIndex] = useState(0)
   const [code, setCode] = useState(PRESET_PROBLEMS[0].starterCode)
@@ -491,22 +391,35 @@ export default function CodingSQLPractice({ onNavigate: _onNavigate }: Props) {
   const [isRunning, setIsRunning] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isGenerating, setIsGenerating] = useState(false)
+  const [runSummary, setRunSummary] = useState<string | null>(null)
   const [evaluation, setEvaluation] = useState<{
     score: number
     feedback: string
     complexity: string
     passedCount: number
     totalCount: number
+    correctness?: string
+    approach?: string
+    complexityNotes?: string
+    codeQuality?: string
+    edgeCases?: string
+    strengths?: string[]
+    missingPoints?: string[]
   } | null>(null)
 
   const currentProblem = PRESET_PROBLEMS[currentProblemIndex] || PRESET_PROBLEMS[0]
 
+  useEffect(() => {
+    if (evaluation) leftPaneRef.current?.scrollTo({ top: 0, behavior: 'smooth' })
+  }, [evaluation])
+
   const handleSelectProblem = (p: Problem, idx: number) => {
     setCurrentProblemIndex(idx)
     setSelectedLanguage(p.language)
-    setCode(getStarterSyntaxTemplate(p.title, p.language, p.mode))
+    setCode(p.starterCode)
     setTestCases(p.testCases.map(tc => ({ ...tc, status: 'pending', actual: undefined })))
     setEvaluation(null)
+    setRunSummary(null)
   }
 
   const handleSwitchTab = (tab: 'coding' | 'sql') => {
@@ -517,104 +430,122 @@ export default function CodingSQLPractice({ onNavigate: _onNavigate }: Props) {
     }
   }
 
-  const handleRunTestCases = () => {
-    setIsRunning(true)
-    setEvaluation(null)
-
-    setTimeout(() => {
-      const res = evaluateSubmission(code, selectedLanguage, currentProblem)
-      setTestCases(res.testCases)
-      setIsRunning(false)
-    }, 600)
-  }
-
-  const handleSubmitSolution = () => {
+  const evaluateWithAI = async () => {
     setIsSubmitting(true)
-
-    setTimeout(() => {
-      const res = evaluateSubmission(code, selectedLanguage, currentProblem)
-      setTestCases(res.testCases)
-      setEvaluation({
-        score: res.score,
-        passedCount: res.passedCount,
-        totalCount: res.totalCount,
-        complexity: res.complexity,
-        feedback: res.feedback,
+    setEvaluation(null)
+    try {
+      const response: any = await api.evaluateCodingSQLSubmission({
+        section: activeTab,
+        scoreScale: 100,
+        currentQuestion: currentProblem.description,
+        answer: code,
+        codingSubmission: {
+          title: currentProblem.title,
+          language: selectedLanguage,
+          code,
+          mode: activeTab,
+          testCases: currentProblem.testCases,
+        },
+        setup: { codingLanguage: selectedLanguage, section: activeTab, difficulty: currentProblem.difficulty },
       })
+      const result = response.evaluation || response
+      const score = Math.max(0, Math.min(100, Number(result.score) || 0))
+      const strengths = Array.isArray(result.strengths) ? result.strengths : []
+      const missingPoints = Array.isArray(result.missingPoints) ? result.missingPoints : []
+      const feedback = result.summary || result.correctness || 'AI review completed.'
+      setEvaluation({
+        score,
+        passedCount: 0,
+        totalCount: currentProblem.testCases.length,
+        complexity: result.complexity || 'Static AI review · code not executed',
+        feedback,
+        correctness: result.correctness,
+        approach: result.approach,
+        complexityNotes: result.complexity,
+        codeQuality: result.codeQuality || result.sqlQuality,
+        edgeCases: result.edgeCases,
+        strengths,
+        missingPoints,
+      })
+    } catch (error) {
+      setEvaluation({ score: 0, passedCount: 0, totalCount: currentProblem.testCases.length, complexity: 'AI service unavailable', feedback: error instanceof Error ? error.message : 'Could not reach the AI evaluation service.' })
+    } finally {
       setIsSubmitting(false)
-    }, 800)
+    }
   }
 
-  const handleGenerateAIProblem = () => {
-    setIsGenerating(true)
-    setTimeout(() => {
-      const isCoding = activeTab === 'coding'
-      const starter = getStarterSyntaxTemplate(
-        isCoding ? 'Dynamic AI Challenge: Maximum Subarray Sum' : 'Dynamic AI Challenge: Customer Second Highest Purchase',
-        selectedLanguage,
-        activeTab
-      )
-      const newProblem: Problem = isCoding
-        ? {
-            id: `ai-gen-${Date.now()}`,
-            title: 'Dynamic AI Challenge: Maximum Subarray Sum',
-            mode: 'coding',
-            category: 'Dynamic Programming & Kadanes Algorithm',
-            difficulty: 'Medium',
-            language: selectedLanguage,
-            description:
-              'Given an integer array `nums`, find the subarray with the largest sum, and return its sum.\n\nGenerated dynamically by VIVA AI Model.',
-            constraints: [
-              '1 <= nums.length <= 10^5',
-              '-10^4 <= nums[i] <= 10^4',
-              'Optimal Time: O(N)',
-            ],
-            examples: [
-              { input: 'nums = [-2,1,-3,4,-1,2,1,-5,4]', output: '6', explanation: 'Subarray [4,-1,2,1] has largest sum 6.' },
-            ],
-            starterCode: starter,
-            testCases: [
-              { id: 1, input: '[-2,1,-3,4,-1,2,1,-5,4]', expected: '6' },
-              { id: 2, input: '[1]', expected: '1' },
-              { id: 3, input: '[5,4,-1,7,8]', expected: '23' },
-              { id: 4, input: '[-1, -2, -3]', expected: '-1' },
-              { id: 5, input: '[0, 0, 0, 0]', expected: '0' },
-            ],
-          }
-        : {
-            id: `ai-sql-${Date.now()}`,
-            title: 'Dynamic AI Challenge: Customer Second Highest Purchase',
-            mode: 'sql',
-            category: 'SQL Window Functions & Subqueries',
-            difficulty: 'Medium',
-            language: selectedLanguage,
-            description:
-              'Write an SQL query to find the second highest purchase amount for each customer from the `orders` table.',
-            constraints: [
-              'Table: orders (order_id, customer_id, amount, order_date)',
-              'Use DENSE_RANK() or ROW_NUMBER() window functions',
-            ],
-            examples: [
-              { input: 'orders data for customer 101, 102', output: 'customer_id | second_highest' },
-            ],
-            starterCode: starter,
-            testCases: [
-              { id: 1, input: 'Multiple Purchases Test', expected: 'Passed' },
-              { id: 2, input: 'Single Purchase Edge Case', expected: 'Passed' },
-              { id: 3, input: 'Tied Purchases Rank Test', expected: 'Passed' },
-              { id: 4, input: 'Window Partition Accuracy', expected: 'Passed' },
-              { id: 5, input: 'Execution Plan Efficiency', expected: 'Passed' },
-            ],
-          }
+  const handleRunTestCases = async () => {
+    setIsRunning(true)
+    setRunSummary(null)
+    setEvaluation(null)
+    setTestCases(currentProblem.testCases.map(tc => ({ ...tc, status: 'pending', actual: undefined })))
+    try {
+      const response: any = await api.runCodingSQLTests({
+        code,
+        language: selectedLanguage,
+        problem: { title: currentProblem.title, mode: currentProblem.mode, functionName: currentProblem.functionName, className: currentProblem.className },
+        testCases: currentProblem.testCases,
+      })
+      const results: TestCase[] = response.testCases
+      const passed = results.filter(tc => tc.status === 'passed').length
+      setTestCases(results)
+      setRunSummary(`${passed} of ${results.length} test cases passed.`)
+    } catch (error) {
+      setRunSummary(error instanceof Error ? error.message : 'The code runner could not execute this solution.')
+      setTestCases(currentProblem.testCases.map(tc => ({ ...tc, status: 'failed', actual: 'Runner error' })))
+    } finally {
+      setIsRunning(false)
+    }
+  }
+  const handleSubmitSolution = () => evaluateWithAI()
 
+  const handleGenerateAIProblem = async () => {
+    setIsGenerating(true)
+    try {
+      const history = PRESET_PROBLEMS.filter(p => p.mode === activeTab).map(p => ({ title: p.title, description: p.description }))
+      const response: any = await api.generateCodingSQLQuestion({
+        section: activeTab,
+        index: generationCount + 1,
+        history,
+        setup: { codingLanguage: selectedLanguage, difficulty: 'Medium', section: activeTab },
+      })
+      const q = response?.question || response || {}
+      const questionTitle = typeof q.title === 'string' && q.title.trim() ? q.title.trim() : 'AI Generated Challenge'
+      const questionDescription = q.description ?? q.problem ?? q.text ?? ''
+      const newProblem: Problem = {
+        id: `ai-${activeTab}-${Date.now()}`,
+        title: questionTitle,
+        mode: activeTab,
+        category: typeof q.category === 'string' ? q.category : (activeTab === 'coding' ? 'Coding & Algorithms' : 'SQL & Databases'),
+        difficulty: typeof q.difficulty === 'string' ? q.difficulty : 'Medium',
+        language: selectedLanguage,
+        description: displayText(questionDescription),
+        constraints: Array.isArray(q.constraints) ? q.constraints.map(displayText).filter(Boolean) : [],
+        examples: Array.isArray(q.examples) ? q.examples.map((example: any) => ({
+          input: displayText(example?.input ?? example?.sampleInput ?? ''),
+          output: displayText(example?.output ?? example?.expected ?? ''),
+          explanation: example?.explanation == null ? undefined : displayText(example.explanation),
+        })) : [],
+        starterCode: typeof q.starterCode === 'string' && q.starterCode.trim()
+          ? q.starterCode
+          : getStarterSyntaxTemplate(questionTitle, selectedLanguage, activeTab),
+        testCases: Array.isArray(q.testCases) ? q.testCases.slice(0, 5).map((tc: any, index: number) => ({ id: index + 1, input: displayText(tc.input ?? tc.args ?? ''), expected: displayText(tc.expected ?? tc.output ?? ''), args: Array.isArray(tc.args) ? tc.args : undefined, stdin: typeof tc.stdin === 'string' ? tc.stdin : undefined, setupSql: typeof tc.setupSql === 'string' ? tc.setupSql : undefined, query: typeof tc.query === 'string' ? tc.query : undefined })) : [],
+        functionName: typeof q.functionName === 'string' ? q.functionName : undefined,
+        className: typeof q.className === 'string' ? q.className : undefined,
+      }
+      if (!newProblem.description || !newProblem.testCases.length) throw new Error('The AI returned an incomplete question. Please try again.')
       PRESET_PROBLEMS.unshift(newProblem)
+      setGenerationCount(count => count + 1)
       setCurrentProblemIndex(0)
-      setCode(starter)
-      setSelectedLanguage(selectedLanguage)
-      setTestCases(newProblem.testCases)
+      setCode(newProblem.starterCode)
+      setTestCases(newProblem.testCases.map(tc => ({ ...tc, status: 'pending' })))
       setEvaluation(null)
+      setRunSummary(null)
+    } catch (error) {
+      setEvaluation({ score: 0, passedCount: 0, totalCount: 0, complexity: 'Question generation unavailable', feedback: error instanceof Error ? error.message : 'Could not reach the AI question generation service.' })
+    } finally {
       setIsGenerating(false)
-    }, 1200)
+    }
   }
 
   const filteredProblems = PRESET_PROBLEMS.filter(p => p.mode === activeTab)
@@ -831,6 +762,7 @@ export default function CodingSQLPractice({ onNavigate: _onNavigate }: Props) {
       >
         {/* LEFT PANE: PROBLEM STATEMENT */}
         <div
+          ref={leftPaneRef}
           style={{
             background: '#FFFFFF',
             borderRight: '1px solid rgba(23,32,51,0.09)',
@@ -912,6 +844,88 @@ export default function CodingSQLPractice({ onNavigate: _onNavigate }: Props) {
             </div>
           </div>
 
+          {evaluation && (
+            <section
+              aria-label="AI evaluation"
+              style={{
+                background: '#F0FDF4',
+                border: '1px solid rgba(16,185,129,0.28)',
+                borderLeft: '4px solid #10B981',
+                borderRadius: 12,
+                padding: 16,
+                display: 'grid',
+                gap: 12,
+                minWidth: 0,
+                color: '#172033',
+              }}
+            >
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 12,
+                  flexWrap: 'wrap',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                  <Award size={20} color="#059669" />
+                  <div>
+                    <div style={{ fontSize: 16, fontWeight: 800, color: '#065F46' }}>AI evaluation</div>
+                    <div style={{ fontSize: 11, color: '#527064', marginTop: 2 }}>
+                      {evaluation.complexity === 'AI service unavailable'
+                        ? 'AI review unavailable'
+                        : 'Static AI review · Runtime tests not executed'}
+                    </div>
+                  </div>
+                </div>
+                <div
+                  style={{
+                    background: '#D1FAE5',
+                    color: '#065F46',
+                    borderRadius: 10,
+                    padding: '8px 12px',
+                    fontSize: 15,
+                    fontWeight: 800,
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  Score: {evaluation.score} / 100
+                </div>
+              </div>
+
+              <p style={{ margin: 0, fontSize: 14, lineHeight: 1.65, color: '#344054', overflowWrap: 'anywhere' }}>
+                {evaluation.feedback}
+              </p>
+
+              <div style={{ display: 'grid', gap: 10, fontSize: 13.5, lineHeight: 1.65, color: '#344054' }}>
+                {evaluation.correctness && <div><strong style={{ color: '#172033' }}>Correctness</strong><div>{evaluation.correctness}</div></div>}
+                {evaluation.approach && <div><strong style={{ color: '#172033' }}>Approach</strong><div>{evaluation.approach}</div></div>}
+                {(evaluation.complexityNotes || evaluation.complexity) && (
+                  <div><strong style={{ color: '#172033' }}>Complexity</strong><div>{evaluation.complexityNotes || evaluation.complexity}</div></div>
+                )}
+                {evaluation.codeQuality && <div><strong style={{ color: '#172033' }}>Code / SQL quality</strong><div>{evaluation.codeQuality}</div></div>}
+                {evaluation.edgeCases && <div><strong style={{ color: '#172033' }}>Edge cases</strong><div>{evaluation.edgeCases}</div></div>}
+                {evaluation.strengths?.length ? (
+                  <div>
+                    <strong style={{ color: '#172033' }}>Strengths</strong>
+                    <ul style={{ margin: '4px 0 0', paddingLeft: 20 }}>
+                      {evaluation.strengths.map((item, index) => <li key={`strength-${index}`}>{item}</li>)}
+                    </ul>
+                  </div>
+                ) : null}
+                {evaluation.missingPoints?.length ? (
+                  <div>
+                    <strong style={{ color: '#172033' }}>To improve</strong>
+                    <ul style={{ margin: '4px 0 0', paddingLeft: 20 }}>
+                      {evaluation.missingPoints.map((item, index) => <li key={`improvement-${index}`}>{item}</li>)}
+                    </ul>
+                  </div>
+                ) : null}
+              </div>
+            </section>
+          )}
+
           {/* EXAMPLES */}
           <div>
             <h3
@@ -938,6 +952,8 @@ export default function CodingSQLPractice({ onNavigate: _onNavigate }: Props) {
                     padding: 12,
                     fontSize: 13,
                     fontFamily: 'JetBrains Mono, monospace',
+                    whiteSpace: 'pre-wrap',
+                    overflowWrap: 'anywhere',
                   }}
                 >
                   <div style={{ color: '#5B6478', marginBottom: 4 }}>
@@ -985,6 +1001,8 @@ export default function CodingSQLPractice({ onNavigate: _onNavigate }: Props) {
                 fontSize: 13,
                 color: '#475467',
                 lineHeight: 1.7,
+                whiteSpace: 'pre-wrap',
+                overflowWrap: 'anywhere',
               }}
             >
               {currentProblem.constraints.map((c, i) => (
@@ -1036,6 +1054,9 @@ export default function CodingSQLPractice({ onNavigate: _onNavigate }: Props) {
                   const newLang = e.target.value
                   setSelectedLanguage(newLang)
                   setCode(getStarterSyntaxTemplate(currentProblem.title, newLang, activeTab))
+                  setEvaluation(null)
+                  setRunSummary(null)
+                  setTestCases(currentProblem.testCases.map(tc => ({ ...tc, status: 'pending', actual: undefined })))
                 }}
                 style={{
                   background: '#1E2342',
@@ -1058,9 +1079,7 @@ export default function CodingSQLPractice({ onNavigate: _onNavigate }: Props) {
                   </>
                 ) : (
                   <>
-                    <option value="PostgreSQL">PostgreSQL 15</option>
-                    <option value="MySQL">MySQL 8.0</option>
-                    <option value="SQLite">SQLite 3</option>
+                    <option value="SQLite">SQLite 3 (test runner)</option>
                   </>
                 )}
               </select>
@@ -1068,7 +1087,12 @@ export default function CodingSQLPractice({ onNavigate: _onNavigate }: Props) {
 
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               <button
-                onClick={() => setCode(getStarterSyntaxTemplate(currentProblem.title, selectedLanguage, activeTab))}
+                onClick={() => {
+                  setCode(selectedLanguage === currentProblem.language ? currentProblem.starterCode : getStarterSyntaxTemplate(currentProblem.title, selectedLanguage, activeTab))
+                  setEvaluation(null)
+                  setRunSummary(null)
+                  setTestCases(currentProblem.testCases.map(tc => ({ ...tc, status: 'pending', actual: undefined })))
+                }}
                 style={{
                   background: 'transparent',
                   color: '#94A3B8',
@@ -1088,7 +1112,7 @@ export default function CodingSQLPractice({ onNavigate: _onNavigate }: Props) {
 
               <button
                 onClick={handleRunTestCases}
-                disabled={isRunning}
+                disabled={isRunning || isSubmitting}
                 style={{
                   background: 'rgba(255,255,255,0.1)',
                   color: '#FFFFFF',
@@ -1103,12 +1127,12 @@ export default function CodingSQLPractice({ onNavigate: _onNavigate }: Props) {
                   gap: 6,
                 }}
               >
-                <Play size={14} fill="#FFFFFF" /> {isRunning ? 'Running…' : 'Run 5 Test Cases'}
+                <Play size={14} fill="#FFFFFF" /> {isRunning ? 'Running…' : 'Run Test Cases'}
               </button>
 
               <button
                 onClick={handleSubmitSolution}
-                disabled={isSubmitting}
+                disabled={isSubmitting || isRunning}
                 style={{
                   background: 'linear-gradient(135deg, #10B981 0%, #059669 100%)',
                   color: '#FFFFFF',
@@ -1133,7 +1157,12 @@ export default function CodingSQLPractice({ onNavigate: _onNavigate }: Props) {
           <div style={{ flex: 1, position: 'relative', background: '#0D1126' }}>
             <textarea
               value={code}
-              onChange={e => setCode(e.target.value)}
+              onChange={e => {
+                setCode(e.target.value)
+                setEvaluation(null)
+                setRunSummary(null)
+                setTestCases(currentProblem.testCases.map(tc => ({ ...tc, status: 'pending', actual: undefined })))
+              }}
               spellCheck={false}
               style={{
                 width: '100%',
@@ -1151,60 +1180,6 @@ export default function CodingSQLPractice({ onNavigate: _onNavigate }: Props) {
               }}
             />
           </div>
-
-          {/* EVALUATION REPORT CARD (IF SUBMITTED) */}
-          {evaluation && (
-            <div
-              style={{
-                background: '#161B36',
-                borderTop: '2px solid #10B981',
-                padding: '16px 20px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: 16,
-              }}
-            >
-              <div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
-                  <Award size={18} color="#10B981" />
-                  <span style={{ fontSize: 16, fontWeight: 800, color: '#10B981' }}>
-                    AI Score: {evaluation.score} / 100
-                  </span>
-                  <span
-                    style={{
-                      fontSize: 11,
-                      padding: '2px 8px',
-                      borderRadius: 12,
-                      background: 'rgba(16,185,129,0.15)',
-                      color: '#34D399',
-                      fontWeight: 700,
-                    }}
-                  >
-                    Passed {evaluation.passedCount} of {evaluation.totalCount} Test Cases
-                  </span>
-                </div>
-
-                <div style={{ fontSize: 12.5, color: '#94A3B8', lineHeight: 1.5 }}>
-                  {evaluation.feedback}
-                </div>
-              </div>
-
-              <div
-                style={{
-                  fontSize: 12,
-                  fontFamily: 'JetBrains Mono, monospace',
-                  background: 'rgba(255,255,255,0.06)',
-                  padding: '8px 12px',
-                  borderRadius: 8,
-                  color: '#CBD5E1',
-                  flexShrink: 0,
-                }}
-              >
-                {evaluation.complexity}
-              </div>
-            </div>
-          )}
 
           {/* TEST CASES & VERIFICATION CONSOLE */}
           <div
@@ -1230,11 +1205,16 @@ export default function CodingSQLPractice({ onNavigate: _onNavigate }: Props) {
                 letterSpacing: '0.06em',
               }}
             >
-              <span>5 Verification Test Cases</span>
+              <span>Verification Test Cases</span>
               <span>
                 {testCases.filter(t => t.status === 'passed').length} / {testCases.length} Passed
               </span>
             </div>
+            {runSummary && (() => {
+              const counts = runSummary.match(/^(\d+) of (\d+)/)
+              const allPassed = Boolean(counts && Number(counts[1]) === Number(counts[2]) && Number(counts[2]) > 0)
+              return <div style={{ color: allPassed ? '#34D399' : '#FCA5A5', fontSize: 12 }}>{runSummary}</div>
+            })()}
 
             <div
               style={{
@@ -1288,11 +1268,15 @@ export default function CodingSQLPractice({ onNavigate: _onNavigate }: Props) {
                     {tc.input}
                   </div>
 
+                  {tc.status && tc.status !== 'pending' && <div title={`Expected: ${tc.expected}\nActual: ${tc.actual ?? ''}`} style={{ fontSize: 9.5, color: tc.status === 'passed' ? '#86EFAC' : '#FCA5A5', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    Expected: {tc.expected} · Actual: {tc.actual ?? ''}
+                  </div>}
+
                   <div style={{ fontSize: 10, color: tc.status === 'passed' ? '#34D399' : '#94A3B8' }}>
                     {tc.status === 'passed'
                       ? `Passed (${tc.executionTimeMs}ms)`
                       : tc.status === 'failed'
-                      ? 'Failed Output'
+                      ? `Failed · ${tc.actual || 'Output mismatch'}`
                       : 'Ready to run'}
                   </div>
                 </div>

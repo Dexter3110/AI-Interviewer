@@ -1,9 +1,81 @@
-import { useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
+import type { ReactNode } from 'react'
 import { Bot, Send, User, Sparkles } from 'lucide-react'
 import { api } from '../api/api'
 import { useAuth } from '../context/AuthContext'
 
 interface Message { id:string; role:'user'|'assistant'; content:string; timestamp:Date }
+
+function readableAnswer(value: unknown): string {
+ let answer = typeof value === 'string' ? value.trim() : ''
+ if (!answer) return 'No answer returned.'
+
+ // Some model responses arrive as a JSON object inside a Markdown code fence.
+ const candidate = answer.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim()
+ if (candidate.startsWith('{') && candidate.endsWith('}')) {
+  try {
+   const parsed = JSON.parse(candidate)
+   const text = parsed.answer ?? parsed.response ?? parsed.content ?? parsed.message ?? parsed.text
+   if (typeof text === 'string' && text.trim()) answer = text.trim()
+  } catch { /* Keep the original response if it is not a JSON answer envelope. */ }
+ }
+ return answer
+}
+
+function inlineMarkdown(text: string): ReactNode[] {
+ const parts = text.split(/(`[^`]+`|\*\*[^*]+\*\*|__[^_]+__|\*[^*\n]+\*|_[^_\n]+_|\[[^\]]+\]\(https?:\/\/[^\s)]+\))/g)
+ return parts.map((part, index) => {
+  if (part.startsWith('`') && part.endsWith('`')) return <code key={index} style={{background:'#eef1f7',padding:'2px 5px',borderRadius:4,fontFamily:'Consolas,monospace',fontSize:'.92em'}}>{part.slice(1,-1)}</code>
+  if ((part.startsWith('**') && part.endsWith('**')) || (part.startsWith('__') && part.endsWith('__'))) return <strong key={index}>{part.slice(2,-2)}</strong>
+  if ((part.startsWith('*') && part.endsWith('*')) || (part.startsWith('_') && part.endsWith('_'))) return <em key={index}>{part.slice(1,-1)}</em>
+  const link = part.match(/^\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)$/)
+  if (link) return <a key={index} href={link[2]} target="_blank" rel="noreferrer" style={{color:'#3358E8'}}>{link[1]}</a>
+  return <Fragment key={index}>{part}</Fragment>
+ })
+}
+
+function FormattedAnswer({ content }: { content:string }) {
+ const lines = content.replace(/\r/g,'').split('\n')
+ const blocks: ReactNode[] = []
+ let paragraph: string[] = []
+ let list: { text:string; ordered:boolean }[] = []
+ let code: string[] | null = null
+ const flushParagraph = () => {
+  if (paragraph.length) { blocks.push(<p key={`p-${blocks.length}`} style={{margin:'0 0 10px',lineHeight:1.7}}>{inlineMarkdown(paragraph.join(' '))}</p>); paragraph = [] }
+ }
+ const flushList = () => {
+  if (list.length) {
+   const ordered = list[0].ordered
+   const items = list.map((item, index) => <li key={index} style={{margin:'3px 0'}}>{inlineMarkdown(item.text)}</li>)
+   blocks.push(ordered ? <ol key={`l-${blocks.length}`} style={{margin:'0 0 10px',paddingLeft:23}}>{items}</ol> : <ul key={`l-${blocks.length}`} style={{margin:'0 0 10px',paddingLeft:23}}>{items}</ul>)
+   list = []
+  }
+ }
+ lines.forEach(line => {
+  if (line.trim().startsWith('```')) {
+   if (code) { flushParagraph(); flushList(); blocks.push(<pre key={`c-${blocks.length}`} style={{margin:'4px 0 12px',padding:12,overflowX:'auto',background:'#101629',color:'#f2f5ff',borderRadius:8,fontSize:12}}><code>{code.join('\n')}</code></pre>); code = null }
+   else { flushParagraph(); flushList(); code = [] }
+   return
+  }
+  if (code) { code.push(line); return }
+  const trimmed = line.trim()
+  if (!trimmed) { flushParagraph(); flushList(); return }
+  const heading = trimmed.match(/^(#{1,6})\s+(.+)$/)
+  if (heading) {
+   flushParagraph(); flushList()
+   const level = Math.min(heading[1].length, 4)
+   const style = {margin:'3px 0 8px',fontSize:level === 1 ? 17 : level === 2 ? 15 : 14,fontWeight:700 as const,lineHeight:1.4}
+   blocks.push(<div key={`h-${blocks.length}`} role="heading" aria-level={level} style={style}>{inlineMarkdown(heading[2])}</div>)
+   return
+  }
+  const item = trimmed.match(/^(?:[-*+]\s+|(\d+)[.)]\s+)(.+)$/)
+  if (item) { flushParagraph(); const ordered = Boolean(item[1]); if (list.length && list[0].ordered !== ordered) flushList(); list.push({text:item[2],ordered}); return }
+  flushList(); paragraph.push(trimmed)
+ })
+ flushParagraph(); flushList()
+ if (code) blocks.push(<pre key={`c-${blocks.length}`} style={{margin:'4px 0 12px',padding:12,overflowX:'auto',background:'#101629',color:'#f2f5ff',borderRadius:8,fontSize:12}}><code>{code.join('\n')}</code></pre>)
+ return <div>{blocks}</div>
+}
 
 export default function AskYourDoubt(){
  const {user}=useAuth()
@@ -16,7 +88,7 @@ export default function AskYourDoubt(){
  const send=async(text=input)=>{
   const q=text.trim(); if(!q||busy)return
   setMessages(m=>[...m,{id:crypto.randomUUID(),role:'user',content:q,timestamp:new Date()}]);setInput('');setBusy(true)
-  try{const r=await api.askAI(q);setMessages(m=>[...m,{id:crypto.randomUUID(),role:'assistant',content:r.answer||'No answer returned.',timestamp:new Date()}])}
+  try{const r=await api.askAI(q);setMessages(m=>[...m,{id:crypto.randomUUID(),role:'assistant',content:readableAnswer(r.answer),timestamp:new Date()}])}
   catch(e:any){setMessages(m=>[...m,{id:crypto.randomUUID(),role:'assistant',content:`AI service error: ${e?.message||'Check the backend and GROQ_API_KEY.'}`,timestamp:new Date()}])}
   finally{setBusy(false)}
  }
@@ -27,7 +99,7 @@ export default function AskYourDoubt(){
    <div><b>Ask your AI</b><div style={{fontSize:11,color:'#7B8497'}}>Personalized for {name} using your profile and VIVA interview data.</div></div>
   </header>
   <div ref={scroll} style={{flex:1,overflowY:'auto',padding:24}}>
-   {!messages.length?<div style={{maxWidth:680,margin:'10vh auto',textAlign:'center'}}><Bot size={38} color="#3358E8"/><h2 style={{fontFamily:'Outfit'}}>What can I help you with?</h2><p style={{color:'#7B8497',fontSize:13}}>Ask about DSA, SQL, system design, interviews, your profile, resume or career preparation.</p><div style={{display:'flex',flexWrap:'wrap',gap:9,justifyContent:'center',marginTop:18}}>{suggestions.map(s=><button key={s} onClick={()=>send(s)} style={{padding:'10px 13px',background:'#fff',border:'1px solid #e4e7ec',borderRadius:10,cursor:'pointer'}}>{s}</button>)}</div></div>:<div style={{maxWidth:760,margin:'0 auto',display:'flex',flexDirection:'column',gap:16}}>{messages.map(m=><div key={m.id} style={{display:'flex',gap:9,justifyContent:m.role==='user'?'flex-end':'flex-start'}}><div style={{width:32,height:32,borderRadius:'50%',background:m.role==='user'?'#7B5CFA':'#3358E8',color:'#fff',display:'grid',placeItems:'center',flexShrink:0}}>{m.role==='user'?<User size={15}/>:<Bot size={15}/>}</div><div style={{maxWidth:'78%',padding:'12px 15px',borderRadius:m.role==='user'?'16px 16px 4px 16px':'16px 16px 16px 4px',background:m.role==='user'?'#3358E8':'#fff',color:m.role==='user'?'#fff':'#172033',whiteSpace:'pre-wrap',lineHeight:1.6,fontSize:13.5,border:'1px solid #e4e7ec'}}>{m.content}<div style={{fontSize:9,opacity:.55,marginTop:5}}>{m.timestamp.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</div></div></div>)}{busy&&<div style={{fontSize:12,color:'#7B8497'}}>VIVA is thinking…</div>}</div>}
+   {!messages.length?<div style={{maxWidth:680,margin:'10vh auto',textAlign:'center'}}><Bot size={38} color="#3358E8"/><h2 style={{fontFamily:'Outfit'}}>What can I help you with?</h2><p style={{color:'#7B8497',fontSize:13}}>Ask about DSA, SQL, system design, interviews, your profile, resume or career preparation.</p><div style={{display:'flex',flexWrap:'wrap',gap:9,justifyContent:'center',marginTop:18}}>{suggestions.map(s=><button key={s} onClick={()=>send(s)} style={{padding:'10px 13px',background:'#fff',border:'1px solid #e4e7ec',borderRadius:10,cursor:'pointer'}}>{s}</button>)}</div></div>:<div style={{maxWidth:760,margin:'0 auto',display:'flex',flexDirection:'column',gap:16}}>{messages.map(m=><div key={m.id} style={{display:'flex',gap:9,justifyContent:m.role==='user'?'flex-end':'flex-start'}}><div style={{width:32,height:32,borderRadius:'50%',background:m.role==='user'?'#7B5CFA':'#3358E8',color:'#fff',display:'grid',placeItems:'center',flexShrink:0}}>{m.role==='user'?<User size={15}/>:<Bot size={15}/>}</div><div style={{maxWidth:'78%',padding:'12px 15px',borderRadius:m.role==='user'?'16px 16px 4px 16px':'16px 16px 16px 4px',background:m.role==='user'?'#3358E8':'#fff',color:m.role==='user'?'#fff':'#172033',whiteSpace:m.role==='user'?'pre-wrap':'normal',lineHeight:1.6,fontSize:13.5,border:'1px solid #e4e7ec'}}>{m.role==='assistant'?<FormattedAnswer content={m.content}/>:m.content}<div style={{fontSize:9,opacity:.55,marginTop:5}}>{m.timestamp.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</div></div></div>)}{busy&&<div style={{fontSize:12,color:'#7B8497'}}>VIVA is thinking…</div>}</div>}
   </div>
   <form onSubmit={e=>{e.preventDefault();send()}} style={{padding:'12px 24px 18px',background:'rgba(250,249,245,.96)',borderTop:'1px solid #e4e7ec',display:'flex',gap:9}}>
    <input value={input} onChange={e=>setInput(e.target.value)} disabled={busy} placeholder="Ask anything about your preparation…" style={{flex:1,padding:'12px 14px',border:'1px solid #d9dee8',borderRadius:10,outline:0}}/>

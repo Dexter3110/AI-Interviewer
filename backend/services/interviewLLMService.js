@@ -8,6 +8,8 @@ async function agent(path, payload, timeout = 90000) {
 }
 
 exports.evaluateAnswer = (payload) => agent('/evaluate', payload);
+exports.generateCodingQuestion = (payload) => agent('/coding-sql/generate', payload, 120000);
+exports.evaluateCodingSubmission = (payload) => agent('/coding-sql/evaluate', payload, 120000);
 exports.transcribe = async (buffer, filename, mimeType) => {
   const FormData = require('form-data');
   const form = new FormData();

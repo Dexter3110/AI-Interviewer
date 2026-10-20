@@ -27,6 +27,7 @@ app = Flask(__name__)
 eval_verbal = None
 
 eval_code = None
+generate_code_question = None
 
 
 def load_verbal_agent():
@@ -63,6 +64,14 @@ def load_coding_agent():
         )
 
     return eval_code
+
+
+def load_coding_question_generator():
+    global generate_code_question
+    if generate_code_question is None:
+        from coding_sql_agent import ask
+        generate_code_question = ask
+    return generate_code_question
 
 
 # ============================================================
@@ -241,6 +250,47 @@ def evaluate():
         return jsonify({
             "message": str(e)
         }), 500
+
+
+@app.post("/coding-sql/generate")
+def generate_coding_sql_question():
+    try:
+        p = request.get_json(force=True) or {}
+        section = p.get("section", "coding")
+        if section not in ("coding", "sql"):
+            return jsonify({"message": "section must be coding or sql"}), 400
+        generator = load_coding_question_generator()
+        history = p.get("history", [])
+        question = None
+        seen_titles = {
+            str(item.get("title", "")).strip().casefold()
+            for item in history if isinstance(item, dict)
+        }
+        for attempt in range(3):
+            question = generator(
+                p.get("setup", {}), history, p.get("index", 1) + attempt, section
+            )
+            title = str(question.get("title", "")).strip().casefold()
+            if title and title not in seen_titles:
+                break
+            history = [*history, {"title": title, "description": question.get("description", "")}]
+        else:
+            return jsonify({"message": "The AI repeated a previous question. Please generate again."}), 502
+        return jsonify({"question": question})
+    except Exception as e:
+        print("Coding/SQL question generation error:", e, flush=True)
+        return jsonify({"message": str(e)}), 500
+
+
+@app.post("/coding-sql/evaluate")
+def evaluate_coding_sql_submission():
+    try:
+        p = request.get_json(force=True) or {}
+        result = load_coding_agent()(p)
+        return jsonify({"evaluation": result})
+    except Exception as e:
+        print("Coding/SQL sandbox evaluation error:", e, flush=True)
+        return jsonify({"message": str(e)}), 500
 
 
 # ============================================================

@@ -151,6 +151,15 @@ async function request(
 
 export const api = {
 
+  generateCodingSQLQuestion: (body: Record<string, unknown>) =>
+    request('/coding-sql/generate', { method: 'POST', body: JSON.stringify(body) }),
+
+  evaluateCodingSQLSubmission: (body: Record<string, unknown>) =>
+    request('/coding-sql/evaluate', { method: 'POST', body: JSON.stringify(body) }),
+
+  runCodingSQLTests: (body: Record<string, unknown>) =>
+    request('/coding-sql/run', { method: 'POST', body: JSON.stringify(body) }),
+
   // ----------------------------------------------------------
   // AUTH
   // ----------------------------------------------------------

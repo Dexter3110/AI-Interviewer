@@ -31,6 +31,8 @@ const profileRoutes = require("./routes/profileRoutes");
 const resumeRoutes = require("./routes/resumeRoutes");
 const interviewRoutes = require("./routes/interviewRoutes");
 const liveInterviewRoutes = require("./routes/liveInterviewRoutes");
+const interviewLLM = require("./services/interviewLLMService");
+const codeExecution = require("./services/codeExecutionService");
 
 // NEW: Learning / Courses / AI routes
 const learningRoutes = require("./routes/learningRoutes");
@@ -155,6 +157,43 @@ app.use(
   "/api/live-interviews",
   liveInterviewRoutes
 );
+
+app.post("/api/coding-sql/generate", async (req, res, next) => {
+  try {
+    const section = req.body?.section;
+    if (!["coding", "sql"].includes(section)) {
+      return res.status(400).json({ message: "section must be coding or sql" });
+    }
+    res.json(await interviewLLM.generateCodingQuestion(req.body));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/coding-sql/evaluate", async (req, res, next) => {
+  try {
+    res.json(await interviewLLM.evaluateCodingSubmission(req.body));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/coding-sql/run", async (req, res, next) => {
+  try {
+    const { code, language, problem, testCases } = req.body || {};
+    if (typeof code !== "string" || !code.trim()) return res.status(400).json({ message: "Add your solution before running test cases." });
+    if (!problem || typeof problem.title !== "string" || !Array.isArray(testCases) || testCases.length < 1 || testCases.length > 10) {
+      return res.status(400).json({ message: "A problem and between 1 and 10 test cases are required." });
+    }
+    if (code.length > 30000) return res.status(413).json({ message: "Solution exceeds the 30 KB limit." });
+    if (testCases.some(testCase => typeof testCase.setupSql === "string" && testCase.setupSql.length > 20000)) {
+      return res.status(413).json({ message: "SQL test fixtures exceed the 20 KB limit." });
+    }
+    res.json({ testCases: await codeExecution.runTestCases({ code, language, problem, testCases }) });
+  } catch (error) {
+    next(error);
+  }
+});
 
 // ============================================================
 // LEARNING / COURSES / AI ROUTES

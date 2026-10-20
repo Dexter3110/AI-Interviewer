@@ -1,6 +1,7 @@
 node_modules/
 backend/node_modules/
 backend/uploads/
+backend/runner/.tools/
 backend/data/*.csv
 __pycache__/
 *.pyc
@@ -22,3 +23,5 @@ logs/
 .tmp-*
 
 
+
+backend/runner/.piston-manager/

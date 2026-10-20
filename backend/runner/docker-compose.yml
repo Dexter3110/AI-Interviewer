@@ -1,0 +1,13 @@
+services:
+  piston:
+    image: ghcr.io/engineer-man/piston:latest
+    container_name: viva-code-runner
+    privileged: true
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:2000:2000"
+    volumes:
+      - piston-packages:/piston
+
+volumes:
+  piston-packages:

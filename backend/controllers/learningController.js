@@ -1055,6 +1055,9 @@ For technical questions:
 - Do not claim to have accessed information
   that you did not access.
 - Keep the answer focused on the student's question.
+- Write for a chat interface: use short paragraphs and clear headings or bullets when helpful.
+- Do not wrap the answer in JSON or put Markdown symbols in a plain-text code block.
+- Use fenced code blocks only for actual code; keep explanations as readable prose.
 
 Student profile:
 
